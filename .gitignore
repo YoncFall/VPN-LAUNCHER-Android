@@ -1,0 +1,20 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android / IDE
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# libbox (118 МБ, качается :app:fetchLibbox)
+app/libs/*.aar
+
+# Прочее
+*.apk
+*.aab
+*.log
