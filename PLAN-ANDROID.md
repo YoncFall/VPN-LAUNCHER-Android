@@ -1,8 +1,12 @@
 # VPN LAUNCHER — план Android-версии
 
-Дата: 2026-09-29. Статус: **этап 1 (исследования + тулчейн)**.
-Рядом лежат `../VPN-LAUNCHER-src` (v1.0.6, эталон поведения) и
-`../vpn-launcher-py` (desktop-переписка, этапы 1-2 готовы).
+Дата: 2026-09-29. Статус: **этапы 1-4 готовы** (коммиты `0af375e` + этап 4):
+тулчейн установлен, скаффолд собирается, `:core` портирован и держит
+golden-паритет (`gradlew :core:test` — 30 зелёных: парсеры подписки, сборка
+конфига, сверка с эталонами PS 5.1 `parse-nodes*.json`/`config-*.json` +
+прогон через `sing-box check`). Рядом лежат `../VPN-LAUNCHER-src`
+(v1.0.6, эталон поведения) и `../vpn-launcher-py` (desktop-переписка,
+этапы 1-2 готовы).
 
 ## Цель
 
@@ -60,21 +64,34 @@ TUN-туннель, с сохранением **golden-паритета с 1.0.6
 
 | # | Этап | Результат |
 |---|------|-----------|
-| 1 | Тулчейн: JDK 17, Android SDK (platform 36, build-tools 36), Gradle wrapper 8.13 | `sdkmanager --version`, `gradlew -v` |
-| 2 | Скаффолд: settings/root build/modules/local.properties/git | дерево собирается |
-| 3 | `:core`: порт парсеров URI/протоколов + golden `parse-nodes*.json` | тесты зелёные |
-| 4 | `:core`: подписка + сборка конфига + golden `config-*.json` + `checkConfig` | тесты зелёные |
-| 5 | `:app`: MainActivity + Compose-раскладка в игровом стиле (поле, кнопки, секции, радио, статус) | скриншот сверяем с desktop |
+| 1 | Тулчейн: JDK 17, Android SDK (platform 36, build-tools 36), Gradle wrapper 8.13 | **готово** |
+| 2 | Скаффолд: settings/root build/modules/local.properties/git | **готово** (`0af375e`) |
+| 3 | `:core`: порт парсеров URI/протоколов + golden `parse-nodes*.json` | **готово** |
+| 4 | `:core`: сборка конфига + golden `config-*.json` + `sing-box check` | **готово**: 30 тестов зелёные |
+| 5 | `:app`: MainActivity + Compose-раскладка в игровом стиле (поле, кнопки, секции, радио, статус) | **в работе**; скриншот сверяем с desktop |
 | 6 | VpnService + libbox-мост: fetchLibbox, PlatformInterface, CommandServer, уведомление | VPN поднимается на устройстве |
 | 7 | Воркеры: подписка (HTTP), TCP-пинг, выбор ноды, режимы TUN/proxy | UX как desktop |
 | 8 | Сборка release APK, установка, E2E-прогон | готовый продукт |
 
 ## Окружение (сегодня)
 
-- JDK: winget `Microsoft.OpenJDK.17`.
-- Android SDK: `%LOCALAPPDATA%\Android\Sdk`, cmdline-tools →
-  `platform-tools`, `platforms;android-36`, `build-tools;36.0.0`.
-- `local.properties` (sdk.dir) — в .gitignore.
+- JDK: Temurin 17.0.20.1, zip в `%LOCALAPPDATA%\jdk17` (winget споткнулся
+  о хэш манифеста — качали напрямую с api.adoptium.net).
+- Android SDK: `%LOCALAPPDATA%\Android\Sdk` — cmdline-tools, platform-tools,
+  `platforms;android-36`, `build-tools;36.0.0` (лицензии приняты пайпом `y`).
+- `local.properties` (sdk.dir, unicode-escape кириллицы) — в .gitignore.
+
+## Нюансы Windows-окружения (проверено вживую)
+
+- **`@argfile` test-worker'а JDK читает в ANSI (CP_ACP), а не в UTF-8** —
+  при `file.encoding=UTF-8` у daemon Gradle воркер не стартует с кириллицей
+  в путях (`ClassNotFoundException: GradleWorkerMain`). Решение:
+  `org.gradle.jvmargs=-Dfile.encoding=Cp1251`. Побочно: JDK в `@argfile`
+  трактует `\` как escape **внутри кавычек** (пути без пробелов Gradle
+  пишет без кавычек — работает). Проверено отдельными экспериментами
+  (java @argfile: ASCII ok / UTF-8 fail / CP1251 ok).
+- `android.overridePathCheck=true` — AGP запрещает кириллицу в пути
+  проекта (b.android.com/95744), штатный обход из сообщения об ошибке.
 
 ## Риски / открытые вопросы
 

@@ -9,13 +9,25 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
 - `:core` — порт desktop-ядра с golden-паритетом к 1.0.6 (фикстуры и
   эталоны копии из vpn-launcher-py/tests).
 
-## Статус: этап 1-2 (план, тулчейн, скаффолд)
+## Статус: этапы 1-4 (:core полностью с golden-паритетом)
+
+- `:core` — порт desktop-ядра: b64, URI-хелперы, TLS/транспорт,
+  парсеры vless/vmess/trojan/ss/hysteria2/tuic, подписка (http/`file://`/путь),
+  сборка конфига sing-box (build/write/new + test_sing_box_config).
+- **Golden-паритет с 1.0.6 закреплён**: фикстуры и эталоны PS 5.1 скопированы
+  из `vpn-launcher-py/tests` (снимок — `tools/make_golden.ps1` там же):
+  `GoldenParseNodesTest` (parse-nodes*.json) и `GoldenConfigTest`
+  (config-*.json + прогон через `sing-box check`, движок ищется как в
+  conftest.py desktop-проекта).
+- `gradlew :core:test` — **30 зелёных** (в т.ч. контроль кириллицы в строках,
+  логические тесты конфига — порт tests/test_config.py).
+- Дальше: Compose-раскладка (этап 5), VpnService + libbox (этап 6).
 
 ## Сборка
 
 ```powershell
-# 1) local.properties: sdk.dir=C:\Users\<вы>\AppData\Local\Android\Sdk
-# 2) тесты ядра (без Android SDK):
+# 1) local.properties уже настроен (sdk.dir)
+# 2) тесты ядра (в JAVA_HOME — JDK 17, лежит в %LOCALAPPDATA%\jdk17):
 .\gradlew :core:test
 # 3) debug-APK (скачает libbox.aar ~118 МБ):
 .\gradlew :app:fetchLibbox :app:assembleDebug
