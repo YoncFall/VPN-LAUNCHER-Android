@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.yoncfall.vpnlauncher.core.maskSubscriptionUrl
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -114,6 +115,8 @@ fun AppScreen() {
                         ui.subUrl, vm::onSubUrl,
                         "вставь ссылку на подписку (https://...)",
                         Modifier.fillMaxWidth(),
+                        // безопасность: токен в поле виден только при правке
+                        mask = ::maskSubscriptionUrl,
                     )
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

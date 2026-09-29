@@ -119,6 +119,29 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
      ИСКЛЮЧЕНИЯХ убрана** — пакет вводится в поле и подтверждается
      клавишей «Готово» (onDone = `addExclusion`), picker «Приложения»
      добавляет сам.
+   7. **Безопасность** (по запросу владельца):
+      - **запрет HTTP на всех версиях Android**: `network_security_config`
+        с `cleartextTrafficPermitted="false"` (в манифесте
+        `networkSecurityConfig`). minSdk 24 — на Android 7/7.1 cleartext
+        разрешён по умолчанию, `http://`-ссылка на подписку уходила бы
+        открытым текстом; теперь везде CLEARTEXT-ошибка в журнал вместо
+        утечки токена. Стек sing-box (Go) от конфига не зависит.
+      - **маска токена подписки в поле ввода**: `maskSubscriptionUrl` (core)
+        оставляет `scheme://host/…`, путь/токен скрыт; `GameField(mask=…)`
+        показывает маску вне фокуса, тап раскрывает поле с клавиатурой,
+        потеря фокуса снова маскирует — случайный скриншот/запись экрана
+        не покажет токен. **`FLAG_SECURE` сознательно НЕ ставим** —
+        скриншоты разрешены (решение владельца, на совести пользователя).
+      - **kill switch**: раньше авария движка (`serviceStop`) гасила
+        сервис — туннель закрывался и весь трафик уходил напрямую без
+        VPN. Теперь `VpnServiceImpl.engineStopRequested`/`failStart` при
+        живом `tunDescriptor` сервис не останавливают: TUN остаётся
+        открытым и гасит трафик, уведомление «Соединение оборвалось —
+        трафик заблокирован», UI показывает красный статус и включает
+        только кнопку «ОТКЛЮЧИТЬ» (`VpnRuntime.killSwitch`, сбрасывается в
+        `closeEngine`). Отклонение от SFA: процесс, убитый системой, снимает
+        маршруты сам — это предел Android (та же особенность у SFA).
+      Тесты: `SubscriptionMaskTest` (ядро, 7) + `SecurityHardenTest` (app, 4).
 - **Опубликовано**: репо https://github.com/YoncFall/VPN-LAUNCHER-Android
   (GPL-3.0), релиз **v2.0.0** с APK под стабильными именами
   (`releases/latest/download/VPN-LAUNCHER.apk` + arm64-v8a/armeabi-v7a),

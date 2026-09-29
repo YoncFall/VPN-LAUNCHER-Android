@@ -29,10 +29,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +44,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -51,11 +56,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 // ---------------------------------------------------------------------------
 // Карточка (card.py)
@@ -303,6 +311,13 @@ fun GameButton(
  * Тёмное поле ввода. Порт GameField (theme.ps1:54-130): заливка Field,
  * радиус 7, рамка Border -> BorderFocus по фокусу (hover нет на тач),
  * плейсхолдер Placeholder, текст FBody.
+ *
+ * Безопасность: параметр `mask` (URL подписки с токеном) - вне фокуса поле
+ * показывает маску, секрет раскрывается только на время редактирования
+ * (тап по маске -> раскрытие + фокус + клавиатура; потеря фокуса -> снова
+ * маска), поэтому случайный скриншот/запись экрана не покажет токен.
+ * Ввод идёт только по реальному значению: маска - отдельный BasicText,
+ * поле ввода монтируется лишь когда раскрыто - правки не искажаются.
  */
 @Composable
 fun GameField(
@@ -312,8 +327,29 @@ fun GameField(
     modifier: Modifier = Modifier,
     height: Dp = 44.dp,
     onDone: (() -> Unit)? = null,
+    mask: ((String) -> String)? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
+    var revealed by remember { mutableStateOf(false) }
+    val masked = mask != null && value.isNotEmpty() && !focused && !revealed
+    // потеря фокуса -> снова маска (на первом кадре revealed=false - no-op)
+    LaunchedEffect(focused) { if (!focused) revealed = false }
+    // клавиатура убрана (back / тап мимо поля): фокус на поле часто остаётся,
+    // поэтому маску возвращаем и по закрытию клавиатуры - токен не висит на
+    // экране без нужды. Задержка нужна, чтобы клавиатура успела открыться
+    // после тапа по маске (иначе маска вернулась бы сразу).
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    LaunchedEffect(imeVisible, revealed) {
+        if (revealed && !imeVisible) {
+            delay(600)
+            if (revealed && !imeVisible) {
+                revealed = false
+                focused = false
+            }
+        }
+    }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     val shape = RoundedCornerShape(7.dp)
     Box(
         modifier
@@ -325,24 +361,44 @@ fun GameField(
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
-        if (value.isEmpty()) {
-            BasicText(placeholder, style = Fonts.Body.copy(color = Theme.Placeholder))
+        if (masked) {
+            // маска вместо текста: тап раскрывает поле для редактирования
+            BasicText(
+                mask!!(value),
+                style = Fonts.Body.copy(color = Theme.Text),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { revealed = true },
+            )
+        } else {
+            if (value.isEmpty()) {
+                BasicText(placeholder, style = Fonts.Body.copy(color = Theme.Placeholder))
+            }
+            androidx.compose.foundation.text.BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = Fonts.Body.copy(color = Theme.Text),
+                cursorBrush = SolidColor(Theme.Accent),
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    imeAction = if (onDone != null) androidx.compose.ui.text.input.ImeAction.Done
+                    else androidx.compose.ui.text.input.ImeAction.Default,
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onDone = if (onDone != null) { { onDone() } } else null,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester),
+            )
+            if (revealed && !focused) {
+                // раскрытие по тапу: сразу фокус и клавиатура
+                LaunchedEffect(Unit) {
+                    focusRequester.requestFocus()
+                    keyboard?.show()
+                }
+            }
         }
-        androidx.compose.foundation.text.BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            textStyle = Fonts.Body.copy(color = Theme.Text),
-            cursorBrush = SolidColor(Theme.Accent),
-            singleLine = true,
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                imeAction = if (onDone != null) androidx.compose.ui.text.input.ImeAction.Done
-                else androidx.compose.ui.text.input.ImeAction.Default,
-            ),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                onDone = if (onDone != null) { { onDone() } } else null,
-            ),
-            modifier = Modifier.fillMaxWidth(),
-        )
     }
 }
 

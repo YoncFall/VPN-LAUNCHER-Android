@@ -9,6 +9,11 @@
 //     (идемпотентно, в порядке очереди executor);
 //   - уведомление статическое: у SFA оно динамическое через CommandClient
 //     (скорость ↑↓ в строке) — у нас нет UI-подписки, отклонение.
+//   - kill switch (отклонение от SFA): авария движка при живом tun сервис
+//     НЕ останавливает - туннель продолжает гасить трафик (VpnRuntime
+//     .killSwitch), иначе он ушёл бы напрямую без VPN; снимается только
+//     ручной «ОТКЛЮЧИТЬ» (closeEngine). Процесс, убитый системой, снимает
+//     маршруты сам - предел Android (та же особенность у SFA).
 // Always-on VPN / системный перезапуск (intent == null) возобновляет
 // последний конфиг из SharedPreferences (пишется в start()).
 //
@@ -270,6 +275,12 @@ class VpnServiceImpl : VpnService() {
             if (st == VpnRuntime.State.STARTING || st == VpnRuntime.State.CONNECTED) {
                 VpnRuntime.state.value = VpnRuntime.State.IDLE
             }
+            // tun закрыт -> kill switch снят, чистое состояние (после ручной
+            // «ОТКЛЮЧИТЬ» UI уже показывает «Отключено»)
+            if (VpnRuntime.killSwitch) {
+                VpnRuntime.killSwitch = false
+                VpnRuntime.state.value = VpnRuntime.State.IDLE
+            }
         }
     }
 
@@ -310,6 +321,11 @@ class VpnServiceImpl : VpnService() {
                 val config = File(path).readText()
                 val server = commandServer ?: return@execute
                 server.startOrReloadService(config, OverrideOptions())
+                if (VpnRuntime.killSwitch) {
+                    // движок запросил остановку во время старта: kill switch
+                    // уже активен, не перетираем FAILED на CONNECTED
+                    return@execute
+                }
                 Log.i(TAG, "service started")
                 AppLog.write("туннель поднят")
                 updateNotification(getString(R.string.notif_started))
@@ -342,15 +358,22 @@ class VpnServiceImpl : VpnService() {
     /** Остановка по запросу движка (serviceStop). */
     fun engineStopRequested() {
         AppLog.write("движок запросил остановку")
-        if (!closing) {
-            // движок остановился сам (runtime error) - как обрыв соединения
-            // в 1.0.6 (Tick: 'Соединение оборвалось...', VPN.ps1:626)
-            VpnRuntime.statusText = "Соединение оборвалось - sing-box завершился, смотри лог"
-            VpnRuntime.dialogTitle = null
-            VpnRuntime.dialogText = null
-            VpnRuntime.state.value = VpnRuntime.State.FAILED
+        if (closing) {
+            // штатная остановка (наш stop/onDestroy): tun закроет closeEngine
+            return
         }
-        stopAll()
+        // kill switch: движок упал при живом tun - НЕ закрываем сервис,
+        // иначе трафик ушёл бы напрямую, без VPN (утечка IP и данных).
+        // TUN без читателя держит маршруты и гасит пакеты, пока пользователь
+        // не нажмёт «ОТКЛЮЧИТЬ» (там снимается и флаг killSwitch).
+        AppLog.write("kill switch: движок упал, туннель блокирует трафик")
+        VpnRuntime.statusText =
+            "Соединение оборвалось - трафик заблокирован. Нажми «ОТКЛЮЧИТЬ»"
+        VpnRuntime.dialogTitle = null
+        VpnRuntime.dialogText = null
+        VpnRuntime.killSwitch = true
+        VpnRuntime.state.value = VpnRuntime.State.FAILED
+        updateNotification(getString(R.string.notif_blocked))
     }
 
     private fun stopAll() {
@@ -364,13 +387,26 @@ class VpnServiceImpl : VpnService() {
     }
 
     private fun failStart(message: String) {
-        // сообщение уже продублировано в logcat; гасим сервис, чтобы не
-        // висела foreground-нотификация с ошибкой
+        // сообщение уже продублировано в logcat
         Log.e(TAG, "start failed: $message")
         AppLog.write("connect ERROR: $message")
-        VpnRuntime.statusText = "Не удалось подключиться"
         VpnRuntime.dialogTitle = "Ошибка подключения"
         VpnRuntime.dialogText = message
+        if (tunDescriptor != null) {
+            // kill switch: tun уже поднят (openTun случился до падения) -
+            // сервис не гасим, туннель продолжает блокировать трафик
+            AppLog.write("kill switch: tun поднят, трафик заблокирован")
+            VpnRuntime.statusText =
+                "Не удалось подключиться - трафик заблокирован. Нажми «ОТКЛЮЧИТЬ»"
+            VpnRuntime.killSwitch = true
+            VpnRuntime.state.value = VpnRuntime.State.FAILED
+            updateNotification(getString(R.string.notif_blocked))
+            return
+        }
+        // туннеля нет - утекать нечему: гасим сервис, чтобы не висела
+        // foreground-нотификация с ошибкой
+        VpnRuntime.statusText = "Не удалось подключиться"
+        VpnRuntime.killSwitch = false
         VpnRuntime.state.value = VpnRuntime.State.FAILED
         stopAll()
     }

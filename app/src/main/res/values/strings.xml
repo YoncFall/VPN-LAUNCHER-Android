@@ -6,4 +6,6 @@
     <string name="notif_channel">VPN</string>
     <string name="notif_starting">Туннель запускается…</string>
     <string name="notif_started">Туннель активен</string>
+    <!-- kill switch: движок упал, туннель продолжает блокировать трафик -->
+    <string name="notif_blocked">Соединение оборвалось — трафик заблокирован</string>
 </resources>

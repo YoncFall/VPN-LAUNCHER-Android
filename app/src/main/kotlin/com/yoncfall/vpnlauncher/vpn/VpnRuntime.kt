@@ -21,4 +21,13 @@ object VpnRuntime {
     /** Текст MessageBox при ошибке подключения (null -> без диалога). */
     @Volatile
     var dialogText: String? = null
+
+    /**
+     * Kill switch: при аварии движка при живом tun сервис НЕ останавливается,
+     * туннель продолжает гасить трафик (иначе ушёл бы напрямую, без VPN).
+     * UI в состоянии FAILED при флаге включает кнопку «ОТКЛЮЧИТЬ» - только
+     * она снимает блокировку (VpnServiceImpl.closeEngine сбрасывает флаг).
+     */
+    @Volatile
+    var killSwitch = false
 }

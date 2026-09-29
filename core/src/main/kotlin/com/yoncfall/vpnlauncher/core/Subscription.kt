@@ -99,6 +99,44 @@ fun fetchNodes(url: String, logger: (String) -> Unit = AppLog::write): List<Json
 }
 
 /**
+ * Маска ссылки подписки для UI (безопасность): оставляет схему и хост
+ * (чтобы пользователь узнавал свой сервер), скрывает путь/токен.
+ *
+ *   https://host/subscription/<токен>  -> https://host/…
+ *   http://host:8080?token=x           -> http://host:8080/…
+ *   file:///a/b/sub.txt                -> file://…/sub.txt
+ *   /storage/…/sub.txt                 -> …/sub.txt
+ *
+ * Пустая строка возвращается как есть (плейсхолдер поля ввода).
+ */
+fun maskSubscriptionUrl(raw: String): String {
+    val t = raw.trim()
+    if (t.isEmpty()) return t
+    val schemeEnd = t.indexOf("://")
+    if (schemeEnd > 0) {
+        val scheme = t.substring(0, schemeEnd).lowercase(Locale.ROOT)
+        val rest = t.substring(schemeEnd + 3)
+        if (scheme == "http" || scheme == "https") {
+            val hostAndPort = rest.substringBefore('/').substringBefore('?')
+            return if (hostAndPort.isNotEmpty()) "$scheme://$hostAndPort/…" else "$scheme://…"
+        }
+        if (scheme == "file") {
+            val name = rest.substringBefore('?').substringAfterLast('/')
+            return if (name.isNotEmpty()) "file://…/$name" else "file://…"
+        }
+    }
+    // локальный путь без схемы: только последний сегмент, а если сегментов
+    // нет (строка без разделителей) - маскируем целиком, чтобы не светить
+    val base = t.substringBefore('?')
+    val name = when {
+        '/' in base -> base.substringAfterLast('/')
+        '\\' in base -> base.substringAfterLast('\\')
+        else -> ""
+    }
+    return if (name.isNotEmpty()) "…/$name" else "…"
+}
+
+/**
  * Parse-NodeList: текст подписки (или b64) -> список нод с display/proto.
  * Пустые строки и строки без "://" пропускаются; тег node-N по позиции
  * строки среди прошедших фильтр (нумерация с 1).

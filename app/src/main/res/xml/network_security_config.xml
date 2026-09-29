@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Безопасность: запрет незащищённого HTTP на всех версиях Android.
+
+  minSdk=24 - на Android 7/7.1 (API 24-27) cleartext разрешён по умолчанию,
+  поэтому http://-ссылка на подписку уходила бы по воздуху открытым текстом
+  (токен подписки = ключ доступа к серверам). Явный запрет ниже действует и
+  там: HttpURLConnection/OkHttp получат CLEARTEXT-ошибку, текст попадёт в
+  журнал приложения вместо утечки.
+
+  Стек sing-box (Go, JNI) от этого конфига не зависит - узлы ходят своим
+  TLS/Reality/Shadowsocks; Java-уровень приложения использует только HTTPS
+  (подписка, egress-проверка api.ipify.org).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

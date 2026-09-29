@@ -552,7 +552,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         status = VpnRuntime.statusText ?: "Не удалось подключиться",
                         statusLevel = StatusLevel.DANGER,
                         led = LedState.ERR,
-                        disconnectEnabled = false,
+                        // kill switch: туннель жив и блокирует трафик -
+                        // доступна только «ОТКЛЮЧИТЬ» (снимает блокировку)
+                        disconnectEnabled = VpnRuntime.killSwitch,
                         connectRunning = false,
                         egress = "",
                         egressAccent = false,
