@@ -26,9 +26,14 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "2.0.0" // общая версия продукта с desktop (как VPN LAUNCHER 2.0.0)
-        // libbox.aar несёт все ABI; для debug оставляем два основных
+        // libbox.aar несёт все ABI; для debug оставляем два основных.
+        // -Pemu добавляет x86_64 — локальная сборка под эмулятор (E2E без
+        // устройства); в release без -Pemu x86_64 не попадает (см. README).
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            if (project.findProperty("emu") != null) {
+                abiFilters += "x86_64"
+            }
         }
     }
 

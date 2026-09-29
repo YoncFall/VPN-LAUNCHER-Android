@@ -64,6 +64,8 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
 .\gradlew :core:test
 # 3) debug-APK (скачает libbox.aar ~118 МБ):
 .\gradlew :app:fetchLibbox :app:assembleDebug
+# 3б) debug-под эмулятор (добавляет x86_64; E2E без устройства):
+.\gradlew :app:assembleDebug -Pemu
 # 4) release-APK (key.properties с паролем кепки — в корне, gitignored;
 #    без него собирается app-release-unsigned.apk):
 .\gradlew :app:assembleRelease
