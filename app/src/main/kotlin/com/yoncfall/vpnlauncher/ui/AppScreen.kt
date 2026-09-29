@@ -153,7 +153,7 @@ fun AppScreen() {
                     ) {
                         CapsLabel("СЕРВЕРЫ", Modifier.weight(1f))
                         BasicText(
-                            "выбери сервер · пусто - авто-тест всех",
+                            "выбери сервер",
                             style = Fonts.Sub.copy(color = Theme.TextDim),
                             maxLines = 1,
                         )
