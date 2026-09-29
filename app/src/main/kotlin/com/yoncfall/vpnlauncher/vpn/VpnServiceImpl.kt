@@ -26,6 +26,7 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.VpnService
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -57,6 +58,12 @@ class VpnServiceImpl : VpnService() {
         @Volatile
         private var libboxReady = false
 
+        // сервис и приложение в одном процессе: прямой вызов stopAll снимает
+        // FGS (stopForeground), без чего система держит сервис ConnectionRecord'ом
+        // "CR FGS" и stopService не приводит к onDestroy (E2E: туннель жил)
+        @Volatile
+        private var instance: VpnServiceImpl? = null
+
         /** Согласие системы: null = уже выдано, иначе Intent для startActivityForResult. */
         fun prepare(context: Context): Intent? = VpnService.prepare(context)
 
@@ -75,13 +82,23 @@ class VpnServiceImpl : VpnService() {
             ContextCompat.startForegroundService(context, intent)
         }
 
-        /** Остановка: ACTION_STOP из фона может быть запрещён — фолбэк на stopService. */
+        /** Остановка: прямой вызов stopAll из того же процесса (E2E: один лишь
+         *  stopService оставлял isForeground=true - система удерживала сервис
+         *  FGS-связью, onDestroy не вызывался, туннель жил при «Отключено»).
+         *  Если сервиса нет - страховка stopService. */
         fun stop(context: Context) {
-            val intent = Intent(context, VpnServiceImpl::class.java).setAction(ACTION_STOP)
-            runCatching { context.startService(intent) }
-                .onFailure {
+            AppLog.write("stop: запрошена остановка сервиса")
+            val inst = instance
+            if (inst != null) {
+                runCatching { inst.stopAll() }
+                    .onFailure { AppLog.write("stop ERROR: ${it.message}") }
+            } else {
+                runCatching {
                     context.stopService(Intent(context, VpnServiceImpl::class.java))
+                }.onFailure {
+                    AppLog.write("stop ERROR: ${it.message}")
                 }
+            }
         }
 
         // Libbox.setup — один раз на процесс (пути, логи, краш-хендлеры)
@@ -133,6 +150,10 @@ class VpnServiceImpl : VpnService() {
     @Volatile
     private var configPath: String? = null
 
+    /** Дескриптор TUN из establish(): закрывается при остановке (паттерн SFA). */
+    @Volatile
+    var tunDescriptor: ParcelFileDescriptor? = null
+
     private val notificationManager: NotificationManager?
         get() = getSystemService(NotificationManager::class.java)
 
@@ -143,6 +164,7 @@ class VpnServiceImpl : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "vpn-engine").apply { isDaemon = true }
         }
@@ -188,9 +210,26 @@ class VpnServiceImpl : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         closing = true
+        AppLog.write("onDestroy: сервис уничтожен")
+        closeEngine()
+        executor.shutdown()
+    }
+
+    /** Закрытие движка: идемпотентно, ставится в очередь executor. */
+    private fun closeEngine() {
+        if (closing) return
+        closing = true
+        AppLog.write("остановка: закрытие движка запрошено")
         // single-thread executor: закрытие встанет ПОСЛЕ текущей операции старта
         executor.execute {
+            AppLog.write("остановка: шаг 1/4 - закрытие tun-дескриптора")
+            // pfd.close() убивает tun-интерфейс -> система отвязывает сервис
+            // (SFA-порядок: сначала fd, потом closeService/close)
+            tunDescriptor?.let { pfd -> runCatching { pfd.close() } }
+            tunDescriptor = null
+            AppLog.write("остановка: шаг 2/4 - монитор сети")
             NetworkMonitor.setListener(null, connectivity)
             val server = synchronized(engineLock) {
                 val current = commandServer
@@ -198,13 +237,17 @@ class VpnServiceImpl : VpnService() {
                 current
             }
             if (server != null) {
+                AppLog.write("остановка: шаг 3/4 - closeService")
                 runCatching { server.closeService() }
                     .onFailure {
                         runCatching { server.setError("android: close service: ${it.message}") }
                     }
+                AppLog.write("остановка: шаг 4/4 - close")
                 runCatching { server.close() }
                 Log.i(TAG, "engine closed")
                 AppLog.write("движок остановлен")
+            } else {
+                AppLog.write("остановка: движок уже снят")
             }
             // чистая остановка -> IDLE; FAILED остаётся (текст ошибки в UI)
             val st = VpnRuntime.state.value
@@ -212,13 +255,14 @@ class VpnServiceImpl : VpnService() {
                 VpnRuntime.state.value = VpnRuntime.State.IDLE
             }
         }
-        executor.shutdown()
     }
 
     // -------------------------------------------------------------- движок
 
     private fun startEngine(path: String) {
         executor.execute {
+            // переиспользование сервиса после остановки: сбрасываем флаг закрытия
+            closing = false
             synchronized(engineLock) {
                 if (commandServer != null) return@execute // уже поднят
                 VpnRuntime.state.value = VpnRuntime.State.STARTING
@@ -286,7 +330,12 @@ class VpnServiceImpl : VpnService() {
     }
 
     private fun stopAll() {
-        stopForeground(Service.STOP_FOREGROUND_REMOVE)
+        // E2E: система держит сервис связью act=android.net.VpnService, пока
+        // жив tun (IntentBindRecord в dumpsys); stopSelf при живом tun не ведёт
+        // к onDestroy - взаимоблокировка. Порядок: снять FGS, ЗАКРЫТЬ движок
+        // (tun снимется -> система отвяжется), и только потом stopSelf.
+        runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
+        closeEngine()
         stopSelf()
     }
 

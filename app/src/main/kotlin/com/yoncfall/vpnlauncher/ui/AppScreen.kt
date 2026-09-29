@@ -147,12 +147,8 @@ fun AppScreen() {
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        BasicText(
-                            "ПРОТОКОЛ",
-                            style = Fonts.Caps.copy(color = Theme.TextDim, textAlign = TextAlign.End),
-                            maxLines = 1,
-                            modifier = Modifier.width(57.dp),
-                        )
+                        // CapsLabel: автоподбор шрифта (57dp жёстко обрезал «ПРОТОКОЛ»)
+                        CapsLabel("ПРОТОКОЛ", Modifier.width(57.dp), TextAlign.End)
                         Spacer(Modifier.width(6.dp))
                         BasicText(
                             "СЕРВЕР",
@@ -194,7 +190,9 @@ fun AppScreen() {
                     Spacer(Modifier.height(3.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         GameRadio(
-                            "Весь трафик - TUN (нужен админ)",
+                            // Android: не «нужен админ» (это desktop/UAC), а
+                            // системное согласие VpnService (диалог при подключении)
+                            "Весь трафик - TUN",
                             checked = ui.mode == "tun",
                             onClick = { vm.selectMode("tun") },
                             modifier = Modifier.weight(270f),

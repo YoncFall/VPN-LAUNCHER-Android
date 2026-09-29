@@ -1,15 +1,15 @@
 # VPN LAUNCHER — план Android-версии
 
-Дата: 2026-09-29. Статус: **этапы 1-7 готовы** (коммиты `0af375e`, `1fe8370`,
-`a7a405d`, `cb1cc5d` + коммит этапа 7): тулчейн установлен, скаффолд
-собирается, `:core` портирован и держит golden-паритет (`gradlew :core:test`
-— 35 зелёных: парсеры подписки, сборка конфига, TCP-пинг, состояние, сверка с
-эталонами PS 5.1 `parse-nodes*.json`/`config-*.json` + прогон через
-`sing-box check`), `:app` собирает debug-APK: Compose-раскладка в игровом
-стиле + VpnService-мост libbox (CommandServer, PlatformInterface/openTun,
-монитор сети, foreground-нотификация) + логика подключения (загрузка
-подписки/пинг/кнопки, AppViewModel); подъём VPN проверяется на устройстве —
-этап 8). Рядом лежат `../VPN-LAUNCHER-src`
+Дата: 2026-09-29. Статус: **этапы 1-8 готовы** (E2E на реальном устройстве
+пройден, см. README): тулчейн установлен, скаффолд собирается, `:core`
+портирован и держит golden-паритет (`gradlew test` — 42 зелёных: 35 core +
+7 `ExeNameTest`), `:app` собирает release-APK (подпись RSA-2048, сплиты,
+versionName 2.0.0), Compose-раскладка в игровом стиле + VpnService-мост
+libbox (CommandServer, PlatformInterface/openTun, монитор сети,
+foreground-нотификация) + логика подключения (загрузка подписки/пинг/кнопки,
+AppViewModel); подъём/сброс VPN, согласие, автозагрузка и переподключение
+проверены на TECNO SPARK Go 2 (Android 15, 720x1600) — осталась публикация
+android-репо и карточки на сайте. Рядом лежат `../VPN-LAUNCHER-src`
 (v1.0.6, эталон поведения) и `../vpn-launcher-py` (desktop-переписка,
 этапы 1-2 готовы).
 
@@ -76,7 +76,7 @@ TUN-туннель, с сохранением **golden-паритета с 1.0.6
 | 5 | `:app`: MainActivity + Compose-раскладка в игровом стиле (поле, кнопки, секции, радио, статус) | **готово**: APK собирается; скриншот-сверка — на устройстве (этап 8) |
 | 6 | VpnService + libbox-мост: fetchLibbox, PlatformInterface, CommandServer, уведомление | **код готов**: поднимает CommandServer/openTun/монитор сети, FGS systemExempted; подъём VPN проверяется на устройстве (этап 8) |
 | 7 | Воркеры: подписка (HTTP), TCP-пинг, выбор ноды, режимы TUN/proxy | **готово**: `AppViewModel` (порт обработчиков VPN.ps1: загрузка/пинг с прогрессом/исключения с валидацией/.connect/disconnect/testcfg/egress-IP), `VpnRuntime` (состояние сервиса), согласие `VpnService.prepare` вместо UAC, `Libbox.checkConfig(json)`, журнал-экран; отклонения — в докстринге AppViewModel; подъём VPN — этап 8 |
-| 8 | Иконка, release APK, установка, E2E-прогон | **иконка и release-сборка готовы**: mipmap из app.ico 1.0.6 (legacy PNG mdpi–xxxhdpi + adaptive-icon API 26+: фон `#13161D`, foreground 2/3 холста, `android:icon` в манифесте); подпись RSA-2048 читается из `key.properties` (keystore вне репо и gitignored, README.txt с паролем рядом — резервная копия обязательна), сплиты universal/arm64-v8a/armeabi-v7a (59,6/33,5/33,4 МБ), `apksigner verify` проходит, versionName 2.0.0; **осталось**: установка, E2E-прогон, скриншот-сверка — на устройстве |
+| 8 | Иконка, release APK, установка, E2E-прогон | **готово**: mipmap из app.ico 1.0.6 (legacy PNG mdpi–xxxhdpi + adaptive-icon API 26+: фон `#13161D`, foreground 2/3 холста, `android:icon` в манифесте); подпись RSA-2048 читается из `key.properties` (keystore вне репо и gitignored, README.txt с паролем рядом — резервная копия обязательна), сплиты universal/arm64-v8a/armeabi-v7a (59,6/33,5/33,4 МБ), `apksigner verify` проходит, versionName 2.0.0; **E2E пройден на TECNO SPARK Go 2** (Android 15, 720x1600, Wi-Fi adb): старт+автозагрузка (13 нод), пинг 34–71 мс, системное согласие VPN (диалог проверен через `appops ACTIVATE_VPN deny`), подключение (tun0 `172.19.0.1/30`, внешний IP ноды), отключение (tun0 гаснет, сервис уничтожается, FGS-нотификация снимается), переподключение ×2, журнал по шагам остановки. **Найдено и починено в E2E**: `UNICODE_CHARACTER_CLASS` ронял `<clinit>` (`ExeNameTest`); взаимоблокировка остановки — система держит сервис связью `android.net.VpnService`, пока жив tun, — фикс по паттерну SFA (`pfd.close()` до `closeService`, прямой `stop()` из процесса); автозагрузка подписки на старте; статус вместо ошибки при тапе во время загрузки; автоподбор шрифта кнопок/заголовков на 720p |
 
 ## Окружение (сегодня)
 

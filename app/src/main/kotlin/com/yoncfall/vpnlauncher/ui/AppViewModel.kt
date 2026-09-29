@@ -129,6 +129,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             VpnRuntime.state.collect { onRuntime(it) }
         }
+        // холодный старт: подхватываем последнюю ссылку (E2E: HiOS убил процесс -
+        // список пуст -> connect падал в «Сначала загрузи подписку»); тихо,
+        // чтобы оффлайн при старте не показывал диалог
+        if (persisted.subUrl.isNotBlank()) {
+            loadImpl(quiet = true)
+        }
     }
 
     // ------------------------------------------------------------- действия
@@ -168,12 +174,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------ загрузка
 
-    fun loadSubscription() {
+    fun loadSubscription() = loadImpl(quiet = false)
+
+    /** quiet=true: стартовая автозагрузка - ошибки только статусом, без диалога. */
+    private fun loadImpl(quiet: Boolean) {
         val st = _state.value
         if (st.loadRunning) return
         val url = st.subUrl.trim()
         if (url.isEmpty()) {
-            _state.update { it.copy(dialog = GameDialog("", "Вставь ссылку на подписку.")) }
+            if (!quiet) {
+                _state.update { it.copy(dialog = GameDialog("", "Вставь ссылку на подписку.")) }
+            }
             return
         }
         _state.update { it.copy(loadRunning = true) }
@@ -194,9 +205,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _state.update {
                     it.copy(
                         loadRunning = false,
-                        status = "Ошибка загрузки",
-                        statusLevel = StatusLevel.DANGER,
-                        dialog = GameDialog("VPN ЛАУНЧЕР BY @YoncFALL", e.message ?: ""),
+                        status = if (quiet) "Подписка не загрузилась - нажми Загрузить" else "Ошибка загрузки",
+                        statusLevel = StatusLevel.WARN,
+                        dialog = if (quiet) null else GameDialog("VPN ЛАУНЧЕР BY @YoncFALL", e.message ?: ""),
                     )
                 }
             } finally {
@@ -323,6 +334,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val st = _state.value
         if (st.connectRunning || st.disconnectEnabled) return
         if (st.nodes.isEmpty()) {
+            // E2E: после пересоздания активности автозагрузка ещё идёт (~40 с) -
+            // тап по «Подключиться» получал ошибку; говорим статусом
+            if (st.loadRunning) {
+                _state.update {
+                    it.copy(status = "Подписка ещё грузится - секунду...", statusLevel = StatusLevel.TEXT)
+                }
+                return
+            }
             _state.update { it.copy(dialog = GameDialog("", "Сначала загрузи подписку.")) }
             return
         }
@@ -616,9 +635,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val logLines: StateFlow<List<String>> = _logLines.asStateFlow()
 
         // VPN.ps1:256 - как .NET Regex с -notmatch (регистр не важен,
-        // \w - Unicode: Java без UNICODE_CHARACTER_CLASS режет кириллицу)
-        private val EXE_RE: Pattern =
-            Pattern.compile("^[\\w\\-. ]+\\.exe$", Pattern.UNICODE_CHARACTER_CLASS)
+        // буквы/цифры Unicode). UNICODE_CHARACTER_CLASS на Android НЕТ
+        // (падает ExceptionInInitializerError), а без него \w = ASCII —
+        // поэтому Unicode-буквы/цифры явно: \p{L}\p{N} + UNICODE_CASE.
+        // internal: проверяется тестом ExeNameTest.
+        internal val EXE_RE: Pattern =
+            Pattern.compile(
+                "^[\\p{L}\\p{N}_\\-. ]+\\.exe$",
+                Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+            )
 
         private val EGRESS_IP_RE = Regex("\"ip\"\\s*:\\s*\"([^\"]+)\"")
     }

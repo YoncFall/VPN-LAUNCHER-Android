@@ -51,8 +51,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 // ---------------------------------------------------------------------------
 // Карточка (card.py)
@@ -272,10 +274,21 @@ fun GameButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        // E2E 720p: длинные подписи («Загрузить подписку», «Проверить конфиг»)
+        // обрезались по центру без многоточия - ужимаем шрифт до влезания
+        var autoSize by remember(text) { mutableStateOf(Fonts.Btn.fontSize.value) }
         BasicText(
             text,
-            style = Fonts.Btn.copy(color = textColor, textAlign = TextAlign.Center),
+            style = Fonts.Btn.copy(
+                color = textColor,
+                textAlign = TextAlign.Center,
+                fontSize = autoSize.sp,
+            ),
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            onTextLayout = { r ->
+                if ((r.hasVisualOverflow || r.didOverflowWidth) && autoSize > 7f) autoSize -= 0.5f
+            },
             modifier = Modifier.padding(horizontal = 6.dp),
         )
     }
@@ -519,11 +532,20 @@ fun LedView(state: LedState, modifier: Modifier = Modifier, diameter: Dp = 10.dp
 
 /** Капс-заголовок секции (window.py _label, FCaps, TEXT_DIM). */
 @Composable
-fun CapsLabel(text: String, modifier: Modifier = Modifier) {
+fun CapsLabel(text: String, modifier: Modifier = Modifier, textAlign: TextAlign? = null) {
+    // E2E 720p: заголовки таблицы («ПРОТОКОЛ») и секций впритык - автоподбор
+    var autoSize by remember(text) { mutableStateOf(Fonts.Caps.fontSize.value) }
     BasicText(
         text,
-        style = Fonts.Caps.copy(color = Theme.TextDim),
+        style = Fonts.Caps.copy(
+            color = Theme.TextDim,
+            fontSize = autoSize.sp,
+        ).let { if (textAlign != null) it.copy(textAlign = textAlign) else it },
         maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        onTextLayout = { r ->
+            if ((r.hasVisualOverflow || r.didOverflowWidth) && autoSize > 6f) autoSize -= 0.5f
+        },
         modifier = modifier,
     )
 }

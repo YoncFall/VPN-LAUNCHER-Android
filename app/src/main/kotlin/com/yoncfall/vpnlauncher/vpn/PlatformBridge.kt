@@ -110,7 +110,12 @@ class PlatformBridge(private val service: VpnServiceImpl) : PlatformInterface {
         }
 
         val pfd = builder.establish() ?: error("android: establish() failed (разрешение VPN отозвано?)")
-        return pfd.detachFd()
+        // SFA: без detachFd - pfd хранится в сервисе и закрывается при остановке
+        // (E2E: с detachFd tun переживал closeService/close, т.к. Go этот fd не
+        // закрывает, и система держала сервис/интерфейс вечно)
+        service.tunDescriptor?.let { old -> runCatching { old.close() } }
+        service.tunDescriptor = pfd
+        return pfd.fd
     }
 
     override fun registerMyInterface(name: String?) {
