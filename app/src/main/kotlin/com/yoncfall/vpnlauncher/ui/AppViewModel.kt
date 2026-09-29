@@ -33,7 +33,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.yoncfall.vpnlauncher.core.AppLog
 import com.yoncfall.vpnlauncher.core.ConfigError
-import com.yoncfall.vpnlauncher.core.GAME_SAFE_PROCESSES
 import com.yoncfall.vpnlauncher.core.VpnState
 import com.yoncfall.vpnlauncher.core.fetchNodes
 import com.yoncfall.vpnlauncher.core.loadState
@@ -64,8 +63,16 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/** MessageBox: заголовок пуст = показывается только текст (как Show(text)). */
-data class GameDialog(val title: String, val text: String)
+/**
+ * MessageBox: заголовок пуст = показывается только текст (как Show(text)).
+ * items непусто = режим picker'а установленных приложений (label, package)
+ * для исключений вместо текстового окна.
+ */
+data class GameDialog(
+    val title: String,
+    val text: String,
+    val items: List<Pair<String, String>> = emptyList(),
+)
 
 /** Цвет строки статуса (Pal: Text/Danger/Warn/Accent2). */
 enum class StatusLevel { TEXT, DANGER, WARN, OK, ACCENT }
@@ -103,8 +110,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(
         UiState(
             subUrl = persisted.subUrl,
-            // mode всегда 'tun': режим прокси на Android недоступен
-            exclusions = persisted.appList,
+            // mode всегда 'tun': режим прокси на Android недоступен.
+            // исключения = пакеты приложений; старые .exe-записи (настольный
+            // порт) отбрасываем - они на Android бессмысленны
+            exclusions = persisted.appList.filter { PACKAGE_RE.matcher(it).matches() },
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -279,12 +288,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addExclusion() {
         val st = _state.value
-        var v = st.procInput.trim()
+        val v = st.procInput.trim()
         if (v.isEmpty()) return
-        if (!v.endsWith(".exe", ignoreCase = true)) v = "$v.exe"
-        if (!EXE_RE.matcher(v).matches()) {
+        if (!PACKAGE_RE.matcher(v).matches()) {
             _state.update {
-                it.copy(status = "Не похоже на имя процесса (.exe)", statusLevel = StatusLevel.DANGER)
+                it.copy(
+                    status = "Не пакет Android (пример: com.whatsapp)",
+                    statusLevel = StatusLevel.DANGER,
+                )
             }
             return
         }
@@ -292,18 +303,49 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(status = "$v уже есть в списке", statusLevel = StatusLevel.WARN) }
             return
         }
-        if (GAME_SAFE_PROCESSES.any { it.equals(v, ignoreCase = true) }) {
-            _state.update {
-                it.copy(status = "$v и так исключён автоматически", statusLevel = StatusLevel.WARN)
-            }
-            return
-        }
         val list = st.exclusions + v
         _state.update {
-            it.copy(exclusions = list, procInput = "", status = "Добавлено исключение: $v", statusLevel = StatusLevel.OK)
+            it.copy(
+                exclusions = list,
+                procInput = "",
+                status = "Исключение добавлено: $v",
+                statusLevel = StatusLevel.OK,
+            )
         }
         save(persisted.copy(appList = list))
         AppLog.write("exclusion added by user: $v")
+    }
+
+    /**
+     * Picker установленных приложений для исключений. Android-девиация:
+     * настольный порт выбирал запущенные .exe-процессы, здесь список ставится
+     * из PackageManager (label + пакет), эффект - addDisallowedApplication.
+     */
+    fun showAppPicker() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val apps = installedApps()
+            _state.update {
+                it.copy(dialog = GameDialog("ВЫБРАТЬ ПРИЛОЖЕНИЕ", "", items = apps))
+            }
+        }
+    }
+
+    /** Тап в picker: пакет уходит сразу в исключения (поле - как ввод руками). */
+    fun pickApp(pkg: String) {
+        _state.update { it.copy(dialog = null, procInput = pkg) }
+        addExclusion()
+    }
+
+    private fun installedApps(): List<Pair<String, String>> {
+        val app = getApplication<Application>()
+        val pm = app.packageManager
+        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        @Suppress("DEPRECATION")
+        return pm.queryIntentActivities(intent, 0)
+            .map { it.loadLabel(pm).toString().trim() to it.activityInfo.packageName }
+            .filter { it.first.isNotEmpty() && it.second != app.packageName }
+            .distinctBy { it.second }
+            .sortedBy { it.first.lowercase() }
     }
 
     fun deleteExclusion() {
@@ -387,7 +429,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (consent != null) {
                     _consent.value = consent
                 } else {
-                    VpnServiceImpl.start(app, path.path)
+                    VpnServiceImpl.start(app, path.path, st.exclusions)
                 }
             } catch (e: Throwable) {
                 AppLog.write("connect ERROR: ${e.message}")
@@ -408,7 +450,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun onConsentResult(ok: Boolean) {
         _consent.value = null
         if (ok) {
-            VpnServiceImpl.start(getApplication(), configFile.path)
+            VpnServiceImpl.start(getApplication(), configFile.path, _state.value.exclusions)
             // дальше статусы придёт от сервиса (STARTING -> CONNECTED)
         } else {
             _state.update {
@@ -634,15 +676,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         /** Журнал в памяти (заменяет файл 1.0.6; обрезка до 500 строк). */
         val logLines: StateFlow<List<String>> = _logLines.asStateFlow()
 
-        // VPN.ps1:256 - как .NET Regex с -notmatch (регистр не важен,
-        // буквы/цифры Unicode). UNICODE_CHARACTER_CLASS на Android НЕТ
-        // (падает ExceptionInInitializerError), а без него \w = ASCII —
-        // поэтому Unicode-буквы/цифры явно: \p{L}\p{N} + UNICODE_CASE.
-        // internal: проверяется тестом ExeNameTest.
-        internal val EXE_RE: Pattern =
+        // Android-девиация вместо VPN.ps1:256 (настольные исключения -
+        // имена .exe-процессов): здесь исключение = пакет приложения
+        // (com.example.app), эффект - VpnService.addDisallowedApplication.
+        // Точка обязательна, .exe отсекается явно (настольные имена на
+        // Android бессмысленны и молча игнорировались бы системой).
+        // internal: проверяется тестом PackageNameTest.
+        internal val PACKAGE_RE: Pattern =
             Pattern.compile(
-                "^[\\p{L}\\p{N}_\\-. ]+\\.exe$",
-                Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
+                "^(?!.*\\.exe$)[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$",
+                Pattern.CASE_INSENSITIVE,
             )
 
         private val EGRESS_IP_RE = Regex("\"ip\"\\s*:\\s*\"([^\"]+)\"")

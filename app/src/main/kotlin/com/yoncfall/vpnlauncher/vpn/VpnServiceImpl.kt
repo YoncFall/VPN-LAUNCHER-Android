@@ -50,8 +50,10 @@ class VpnServiceImpl : VpnService() {
         const val ACTION_START = "com.yoncfall.vpnlauncher.vpn.START"
         const val ACTION_STOP = "com.yoncfall.vpnlauncher.vpn.STOP"
         const val EXTRA_CONFIG = "configPath"
+        const val EXTRA_EXCLUDE = "excludePackages"
         private const val PREFS = "vpn"
         private const val KEY_LAST_CONFIG = "lastConfig"
+        private const val KEY_LAST_EXCLUDE = "lastExclude"
         private const val NOTIFICATION_ID = 10
         private const val CHANNEL_ID = "vpn"
 
@@ -70,15 +72,20 @@ class VpnServiceImpl : VpnService() {
         /** Libbox.setup (idempotent) для проверки конфига из UI до старта сервиса. */
         fun ensureReady(context: Context) = ensureSetup(context.applicationContext)
 
-        /** Запуск туннеля: пишет последний конфиг (для always-on) и поднимает сервис. */
-        fun start(context: Context, configPath: String) {
+        /**
+         * Запуск туннеля: пишет последний конфиг (для always-on) и пакеты
+         * исключений (для addDisallowedApplication) и поднимает сервис.
+         */
+        fun start(context: Context, configPath: String, excludePackages: List<String> = emptyList()) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_LAST_CONFIG, configPath)
+                .putStringSet(KEY_LAST_EXCLUDE, excludePackages.toSet())
                 .apply()
             val intent = Intent(context, VpnServiceImpl::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_CONFIG, configPath)
+                .putStringArrayListExtra(EXTRA_EXCLUDE, ArrayList(excludePackages))
             ContextCompat.startForegroundService(context, intent)
         }
 
@@ -149,6 +156,15 @@ class VpnServiceImpl : VpnService() {
 
     @Volatile
     private var configPath: String? = null
+
+    /**
+     * Пакеты приложений, исключённых из VPN (из UI, см. start()). Читаются
+     * в startEngine из prefs (путь и для системного always-on старта),
+     * применяются в PlatformBridge.openTun = addDisallowedApplication.
+     */
+    @Volatile
+    var excludedPackages: List<String> = emptyList()
+        private set
 
     /** Дескриптор TUN из establish(): закрывается при остановке (паттерн SFA). */
     @Volatile
@@ -263,6 +279,14 @@ class VpnServiceImpl : VpnService() {
         executor.execute {
             // переиспользование сервиса после остановки: сбрасываем флаг закрытия
             closing = false
+            // исключения приложений: источник - prefs (см. start())
+            excludedPackages = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getStringSet(KEY_LAST_EXCLUDE, emptySet())
+                .orEmpty()
+                .toList()
+            if (excludedPackages.isNotEmpty()) {
+                AppLog.write("excluded apps: ${excludedPackages.joinToString(", ")}")
+            }
             synchronized(engineLock) {
                 if (commandServer != null) return@execute // уже поднят
                 VpnRuntime.state.value = VpnRuntime.State.STARTING

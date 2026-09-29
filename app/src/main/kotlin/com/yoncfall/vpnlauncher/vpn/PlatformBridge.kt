@@ -108,6 +108,11 @@ class PlatformBridge(private val service: VpnServiceImpl) : PlatformInterface {
                 runCatching { builder.addDisallowedApplication(pkg) }
             }
         }
+        // исключения из UI пользователя (пакеты Android-приложений):
+        // приложение уходит мимо VPN - аналог .exe-списка на десктопе
+        service.excludedPackages.forEach { pkg ->
+            runCatching { builder.addDisallowedApplication(pkg) }
+        }
 
         val pfd = builder.establish() ?: error("android: establish() failed (разрешение VPN отозвано?)")
         // SFA: без detachFd - pfd хранится в сервисе и закрывается при остановке

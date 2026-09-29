@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -49,6 +50,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -191,17 +193,13 @@ fun AppScreen() {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         GameRadio(
                             // Android: не «нужен админ» (это desktop/UAC), а
-                            // системное согласие VpnService (диалог при подключении)
+                            // системное согласие VpnService (диалог при подключении).
+                            // Системного прокси на Android нет - кнопка режима
+                            // «proxy» удалена (deviation: только TUN)
                             "Весь трафик - TUN",
                             checked = ui.mode == "tun",
                             onClick = { vm.selectMode("tun") },
                             modifier = Modifier.weight(270f),
-                        )
-                        GameRadio(
-                            "Системный прокси",
-                            checked = ui.mode == "proxy",
-                            onClick = { vm.selectMode("proxy") },
-                            modifier = Modifier.weight(280f),
                         )
                     }
                     Spacer(Modifier.height(5.dp))
@@ -215,12 +213,22 @@ fun AppScreen() {
                     ) {
                         CapsLabel("ИСКЛЮЧЕНИЯ", Modifier.weight(1f))
                         BasicText(
-                            "игры, Steam и античиты исключены автоматически",
+                            "приложения из списка идут мимо VPN",
                             style = Fonts.Sub.copy(color = Theme.TextDim),
                             maxLines = 1,
                         )
                     }
                     Spacer(Modifier.height(4.dp))
+
+                    // отображаем label приложения, храним пакет
+                    val pm = LocalContext.current.packageManager
+                    val exclLabels = remember(ui.exclusions) {
+                        ui.exclusions.associateWith { pkg ->
+                            runCatching {
+                                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                            }.getOrDefault(pkg)
+                        }
+                    }
                     Row(modifier = Modifier.fillMaxWidth()) {
                         GameFrame(Modifier.weight(260f).height(124.dp)) {
                             LazyColumn(
@@ -229,7 +237,7 @@ fun AppScreen() {
                             ) {
                                 itemsIndexed(ui.exclusions) { index, name ->
                                     ExclusionRow(
-                                        name = name,
+                                        name = exclLabels[name] ?: name,
                                         selected = ui.selectedExcl == index,
                                         odd = index % 2 == 1,
                                         onClick = { vm.selectExcl(index) },
@@ -241,16 +249,23 @@ fun AppScreen() {
                         Column(Modifier.weight(286f)) {
                             GameField(
                                 ui.procInput, vm::onProcInput,
-                                "выбери процесс или впиши имя .exe",
+                                "выбери кнопкой Приложения или впиши пакет",
                                 Modifier.fillMaxWidth(),
                                 onDone = vm::addExclusion,
                             )
                             Spacer(Modifier.height(4.dp))
-                            GameButton(
-                                "Добавить", ButtonKind.GHOST,
-                                Modifier.fillMaxWidth(), height = 36.dp,
-                                onClick = vm::addExclusion,
-                            )
+                            Row {
+                                GameButton(
+                                    "Добавить", ButtonKind.GHOST,
+                                    Modifier.weight(138f), height = 36.dp,
+                                    onClick = vm::addExclusion,
+                                )
+                                GameButton(
+                                    "Приложения", ButtonKind.GHOST,
+                                    Modifier.weight(148f), height = 36.dp,
+                                    onClick = vm::showAppPicker,
+                                )
+                            }
                             Spacer(Modifier.height(4.dp))
                             Row {
                                 GameButton(
@@ -268,7 +283,7 @@ fun AppScreen() {
                     }
                     Spacer(Modifier.height(8.dp))
                     BasicText(
-                        "Список процессов обновляется при запуске. В поле можно вписать имя .exe вручную.",
+                        "Приложения из списка не пойдут через VPN. Пакет можно вписать и вручную (com.example.app).",
                         style = Fonts.Sub.copy(color = Theme.TextDim),
                     )
                     Spacer(Modifier.height(8.dp))
@@ -327,7 +342,7 @@ fun AppScreen() {
     }
 
     ui.dialog?.let { dialog ->
-        GameDialogView(dialog, onDismiss = vm::dismissDialog)
+        GameDialogView(dialog, onDismiss = vm::dismissDialog, onPick = vm::pickApp)
     }
     if (ui.logVisible) {
         LogScreen(lines = logLines, onClose = vm::hideLog)
@@ -445,9 +460,15 @@ private fun ExclusionRow(name: String, selected: Boolean, odd: Boolean, onClick:
 
 // ------------------------------------------------------------------ диалог
 
-/** MessageBox (текст/заголовок дословно из VPN.ps1; иконки не портируются). */
+/** MessageBox (текст/заголовок дословно из VPN.ps1; иконки не портируются).
+ *  С items = picker установленных приложений (исключения): тап по строке
+ *  передаёт пакет в onPick. */
 @Composable
-private fun GameDialogView(dialog: GameDialog, onDismiss: () -> Unit) {
+private fun GameDialogView(
+    dialog: GameDialog,
+    onDismiss: () -> Unit,
+    onPick: (String) -> Unit,
+) {
     Box(
         Modifier
             .fillMaxSize()
@@ -471,13 +492,51 @@ private fun GameDialogView(dialog: GameDialog, onDismiss: () -> Unit) {
                 BasicText(dialog.title, style = Fonts.Caps.copy(color = Theme.Accent), maxLines = 1)
                 Spacer(Modifier.height(8.dp))
             }
-            BasicText(dialog.text, style = Fonts.Body.copy(color = Theme.Text))
-            Spacer(Modifier.height(16.dp))
-            GameButton(
-                "ОК", ButtonKind.ACCENT,
-                Modifier.fillMaxWidth(), height = 40.dp, radius = 8,
-                onClick = onDismiss,
-            )
+            if (dialog.items.isNotEmpty()) {
+                if (dialog.text.isNotBlank()) {
+                    BasicText(dialog.text, style = Fonts.Body.copy(color = Theme.Text))
+                    Spacer(Modifier.height(8.dp))
+                }
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 340.dp)) {
+                    itemsIndexed(dialog.items) { _, item ->
+                        val (label, pkg) = item
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(pkg) }
+                                .padding(vertical = 9.dp, horizontal = 4.dp),
+                        ) {
+                            BasicText(
+                                label,
+                                style = Fonts.Body.copy(color = Theme.Text),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            BasicText(
+                                pkg,
+                                style = Fonts.Sub.copy(color = Theme.TextDim),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        DividerView()
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                GameButton(
+                    "Отмена", ButtonKind.GHOST,
+                    Modifier.fillMaxWidth(), height = 40.dp, radius = 8,
+                    onClick = onDismiss,
+                )
+            } else {
+                BasicText(dialog.text, style = Fonts.Body.copy(color = Theme.Text))
+                Spacer(Modifier.height(16.dp))
+                GameButton(
+                    "ОК", ButtonKind.ACCENT,
+                    Modifier.fillMaxWidth(), height = 40.dp, radius = 8,
+                    onClick = onDismiss,
+                )
+            }
         }
     }
 }
