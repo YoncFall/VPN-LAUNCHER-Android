@@ -184,7 +184,11 @@ fun AppScreen() {
                         Spacer(Modifier.width(13.dp))
                     }
                     Spacer(Modifier.height(2.dp))
-                    GameFrame(Modifier.fillMaxWidth().height(178.dp)) {
+                    // высота под свободное место карточки (правка по запросу):
+                    // 178dp оставлял ~90dp пустоты внизу; 269dp сдвигает блоки
+                    // ниже вниз и заполняет карточку целиком (остаток = отступ
+                    // карточки bottom=14dp, замер по скриншоту: 50px -> 28px)
+                    GameFrame(Modifier.fillMaxWidth().height(269.dp)) {
                         LazyColumn(
                             Modifier.fillMaxSize().background(Theme.Bg2),
                             contentPadding = PaddingValues(vertical = 4.dp),
