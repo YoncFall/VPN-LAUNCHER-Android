@@ -24,8 +24,10 @@ android {
         applicationId = "com.yoncfall.vpnlauncher"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "2.0.0" // общая версия продукта с desktop (как VPN LAUNCHER 2.0.0)
+        versionCode = 2
+        // Android-версия идёт своей строкой: desktop остаётся 2.0.0,
+        // 2.0.1 - правки после первого релиза (безопасность, UI)
+        versionName = "2.0.1"
         // libbox.aar несёт все ABI; для debug оставляем два основных.
         // -Pemu добавляет x86_64 — локальная сборка под эмулятор (E2E без
         // устройства); в release без -Pemu x86_64 не попадает (см. README).

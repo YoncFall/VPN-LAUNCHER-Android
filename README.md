@@ -143,7 +143,8 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
         маршруты сам — это предел Android (та же особенность у SFA).
       Тесты: `SubscriptionMaskTest` (ядро, 7) + `SecurityHardenTest` (app, 4).
 - **Опубликовано**: репо https://github.com/YoncFall/VPN-LAUNCHER-Android
-  (GPL-3.0), релиз **v2.0.0** с APK под стабильными именами
+  (GPL-3.0), релизы **v2.0.0** (первый) и **v2.0.1** (безопасность + правки
+  UI по отзывам) с APK под стабильными именами
   (`releases/latest/download/VPN-LAUNCHER.apk` + arm64-v8a/armeabi-v7a),
   карточка Android на сайте https://yoncfall.github.io/ (скриншот — без
   URL подписки).
