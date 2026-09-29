@@ -9,7 +9,7 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
 - `:core` — порт desktop-ядра с golden-паритетом к 1.0.6 (фикстуры и
   эталоны копии из vpn-launcher-py/tests).
 
-## Статус: этапы 1-7 (:core с golden-паритетом, логика подключения собрана)
+## Статус: этапы 1-7 + release-сборка (осталось: установка/E2E на устройстве)
 
 - `:core` — порт desktop-ядра: b64, URI-хелперы, TLS/транспорт,
   парсеры vless/vmess/trojan/ss/hysteria2/tuic, подписка (http/`file://`/путь),
@@ -45,8 +45,16 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
   legacy PNG (mdpi…xxxhdpi) + adaptive-icon для API 26+ (фон `#13161D`
   сэмплом тёмного поля иконки, foreground = контент 2/3 холста, чтобы
   рамка попадала под все маски лаунчеров); `android:icon` в манифесте.
-- Дальше: устройство/E2E — подъём VPN, скриншот-сверка, release APK
-  (нужно устройство и решение по подписи).
+- **Release-сборка и подпись (этап 8)**: подпись RSA-2048 читается из
+  `key.properties` в корне репо (в git не попадает — .gitignore), keystore
+  лежит вне репо: `Documents\VPN-LAUNCHER-keystore\` (внутри README.txt
+  с паролем и требованием резервной копии; без кепки нельзя издавать
+  обновления установленных версий). Сплиты `universal + arm64-v8a +
+  armeabi-v7a` («universal + splits, как SFA» из плана): 59,6 / 33,5 /
+  33,4 МБ, `apksigner verify` — 0. Версия продукта **2.0.0** — общая
+  с desktop.
+- Дальше: установка на устройство и E2E-прогон (подъём VPN, скриншот-сверка
+  с desktop); публикация android-репо и карточки на сайте — после E2E.
 
 ## Сборка
 
@@ -56,4 +64,9 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
 .\gradlew :core:test
 # 3) debug-APK (скачает libbox.aar ~118 МБ):
 .\gradlew :app:fetchLibbox :app:assembleDebug
+# 4) release-APK (key.properties с паролем кепки — в корне, gitignored;
+#    без него собирается app-release-unsigned.apk):
+.\gradlew :app:assembleRelease
+#    -> app\build\outputs\apk\release\{app-universal,app-arm64-v8a,
+#       app-armeabi-v7a}-release.apk
 ```

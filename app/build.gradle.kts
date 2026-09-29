@@ -1,9 +1,19 @@
+import java.util.Properties
+
 // :app — Compose-оболочка + VpnService + libbox-мост.
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+}
+
+// Подпись release: rootProject/key.properties (в git не попадает, см. .gitignore).
+// Файла нет или нет ключа storeFile -> release собирается без подписи
+// (app-release-unsigned.apk). Keystore и пароль: README.txt рядом с кепкой.
+val keyProps = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -15,10 +25,21 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "2.0.0" // общая версия продукта с desktop (как VPN LAUNCHER 2.0.0)
         // libbox.aar несёт все ABI; для debug оставляем два основных
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    signingConfigs {
+        if (keyProps.containsKey("storeFile")) {
+            create("release") {
+                storeFile = rootProject.file(keyProps.getProperty("storeFile"))
+                storePassword = keyProps.getProperty("storePassword")
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+            }
         }
     }
 
@@ -29,6 +50,18 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
+    // Релизные APK: universal (для сайта/«скачал и поставил») + по ABI
+    // (arm64-v8a, armeabi-v7a) — «universal + splits, как SFA» (PLAN-ANDROID).
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
         }
     }
 

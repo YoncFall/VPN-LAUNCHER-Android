@@ -76,7 +76,7 @@ TUN-туннель, с сохранением **golden-паритета с 1.0.6
 | 5 | `:app`: MainActivity + Compose-раскладка в игровом стиле (поле, кнопки, секции, радио, статус) | **готово**: APK собирается; скриншот-сверка — на устройстве (этап 8) |
 | 6 | VpnService + libbox-мост: fetchLibbox, PlatformInterface, CommandServer, уведомление | **код готов**: поднимает CommandServer/openTun/монитор сети, FGS systemExempted; подъём VPN проверяется на устройстве (этап 8) |
 | 7 | Воркеры: подписка (HTTP), TCP-пинг, выбор ноды, режимы TUN/proxy | **готово**: `AppViewModel` (порт обработчиков VPN.ps1: загрузка/пинг с прогрессом/исключения с валидацией/.connect/disconnect/testcfg/egress-IP), `VpnRuntime` (состояние сервиса), согласие `VpnService.prepare` вместо UAC, `Libbox.checkConfig(json)`, журнал-экран; отклонения — в докстринге AppViewModel; подъём VPN — этап 8 |
-| 8 | Иконка, release APK, установка, E2E-прогон | **иконка готова**: mipmap из app.ico 1.0.6 (legacy PNG mdpi–xxxhdpi + adaptive-icon API 26+: фон `#13161D`, foreground 2/3 холста, `android:icon` в манифесте); release/E2E и скриншот-сверка — на устройстве |
+| 8 | Иконка, release APK, установка, E2E-прогон | **иконка и release-сборка готовы**: mipmap из app.ico 1.0.6 (legacy PNG mdpi–xxxhdpi + adaptive-icon API 26+: фон `#13161D`, foreground 2/3 холста, `android:icon` в манифесте); подпись RSA-2048 читается из `key.properties` (keystore вне репо и gitignored, README.txt с паролем рядом — резервная копия обязательна), сплиты universal/arm64-v8a/armeabi-v7a (59,6/33,5/33,4 МБ), `apksigner verify` проходит, versionName 2.0.0; **осталось**: установка, E2E-прогон, скриншот-сверка — на устройстве |
 
 ## Окружение (сегодня)
 

@@ -14,6 +14,10 @@ captures/
 # libbox (118 МБ, качается :app:fetchLibbox)
 app/libs/*.aar
 
+# Подпись release (пароль внутри; keystore лежит вне репо - см. README.txt рядом с ним)
+key.properties
+*.keystore
+
 # Прочее
 *.apk
 *.aab
