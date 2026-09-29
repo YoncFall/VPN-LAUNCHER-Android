@@ -86,7 +86,6 @@ data class UiState(
     val pingRunning: Boolean = false,
     val loadRunning: Boolean = false,
     val connectRunning: Boolean = false,
-    val mode: String = "tun",
     val exclusions: List<String> = emptyList(),
     val procInput: String = "",
     val status: String = "Готов",
@@ -110,7 +109,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow(
         UiState(
             subUrl = persisted.subUrl,
-            // mode всегда 'tun': режим прокси на Android недоступен.
             // исключения = пакеты приложений; старые .exe-записи (настольный
             // порт) отбрасываем - они на Android бессмысленны
             exclusions = persisted.appList.filter { PACKAGE_RE.matcher(it).matches() },
@@ -167,26 +165,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _consent.value = null
     }
 
-    /** Режим: 'proxy' на Android недоступен (нет системного прокси). */
-    fun selectMode(mode: String) {
-        if (mode == "tun") {
-            _state.update { it.copy(mode = "tun") }
-        } else {
-            _state.update {
-                it.copy(
-                    status = "Системный прокси недоступен на Android - используется TUN",
-                    statusLevel = StatusLevel.WARN,
-                )
-            }
-        }
-    }
+    // selectMode() удалён (правка после v2.0.0): секции РЕЖИМ нет, режим
+    // всегда 'tun' (в state.json и config.json поле mode сохраняется ядром).
 
     // ------------------------------------------------------------ загрузка
 
     fun loadSubscription() = loadImpl(quiet = false)
 
-    /** quiet=true: стартовая автозагрузка - ошибки только статусом, без диалога. */
-    private fun loadImpl(quiet: Boolean) {
+    /**
+     * Обновление подписки «как в браузере» (кнопка ⟳): перечитывает URL,
+     * обновляет список серверов и сразу перепинговывает их. Тихо не бывает -
+     * ошибка показывается так же, как у «Загрузить подписку».
+     */
+    fun refreshSubscription() = loadImpl(quiet = false, afterSuccess = { pingAll() })
+
+    /**
+     * quiet=true: стартовая автозагрузка - ошибки только статусом, без диалога.
+     * afterSuccess вызывается уже после сброса пингов/выделения (в finally),
+     * чтобы автопинг не затёрся очисткой.
+     */
+    private fun loadImpl(quiet: Boolean, afterSuccess: (() -> Unit)? = null) {
         val st = _state.value
         if (st.loadRunning) return
         val url = st.subUrl.trim()
@@ -198,6 +196,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         _state.update { it.copy(loadRunning = true) }
         viewModelScope.launch(Dispatchers.IO) {
+            var ok = false
             try {
                 val fetched = fetchNodes(url)
                 _state.update {
@@ -210,6 +209,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 save(persisted.copy(subUrl = url))
+                ok = true
             } catch (e: Throwable) {
                 _state.update {
                     it.copy(
@@ -224,6 +224,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // выделение списка сбрасывается Clear'ом только при успехе
                 _state.update { it.copy(pings = emptyMap(), selectedIndex = -1) }
             }
+            // после finally, чтобы автопинг обновления не затёрся очисткой
+            if (ok) afterSuccess?.invoke()
         }
     }
 

@@ -4,7 +4,8 @@
 //   GameButton- кнопка (button.py): градиент + рамка + блик сверху, скины
 //               ghost/accent/danger, выключенная = ghost с тусклым текстом;
 //   GameField - поле ввода (field.py): заливка Field, рамка Border -> BorderFocus;
-//   GameRadio - сегмент режима (radio.py): точка 6px у выбранного;
+//   GameRadio - сегмент режима (radio.py): точка 6px у выбранного (удалён
+//               после правки v2.0.0 - секции РЕЖИМ на Android нет);
 //   DividerView- линия с акцентным градиентом слева->справа (divider.py);
 //   GameFrame - рамка списка (frame.py): блик по верхней грани;
 //   LedView   - лампочка (led.py): свечение + ядро + блик.
@@ -341,70 +342,6 @@ fun GameField(
                 onDone = if (onDone != null) { { onDone() } } else null,
             ),
             modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Радио-сегмент (radio.py)
-// ---------------------------------------------------------------------------
-
-/**
- * Сегмент-радиокнопка режима. Порт New-GameRadio (theme.ps1:937-998):
- * выбрана - градиент (24,52,68)->(16,40,55), голубая рамка, точка 6px (x=14),
- * текст Accent; не выбрана - (23,26,36)->(19,22,31), рамка Line,
- * текст (150,158,176). Радиус 8, шрифт FBtn.
- */
-@Composable
-fun GameRadio(
-    text: String,
-    checked: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    height: Dp = 44.dp,
-) {
-    val top = if (checked) rgb(24, 52, 68) else rgb(23, 26, 36)
-    val bottom = if (checked) rgb(16, 40, 55) else rgb(19, 22, 31)
-    val border = if (checked) Theme.Accent else Theme.Line
-    val textColor = if (checked) Theme.Accent else Theme.RadioTextOff
-    Box(
-        modifier
-            .height(height)
-            .clip(RoundedCornerShape(8.dp))
-            .drawBehind {
-                val r = 8.dp.toPx()
-                val s = 1.dp.toPx()
-                drawRect(Brush.verticalGradient(listOf(top, bottom)))
-                drawRoundRect(
-                    border,
-                    topLeft = Offset(s, s),
-                    size = Size(size.width - 2 * s, size.height - 2 * s),
-                    cornerRadius = CornerRadius(r),
-                    style = Stroke(s),
-                )
-                if (checked) {
-                    // точка 6px: эллипс (14, (h-6)/2, 6, 6)
-                    drawCircle(
-                        Theme.Accent,
-                        radius = 3.dp.toPx(),
-                        center = Offset(17.dp.toPx(), size.height / 2),
-                    )
-                }
-            }
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        BasicText(
-            text,
-            style = Fonts.Btn.copy(color = textColor, textAlign = TextAlign.Center),
-            maxLines = 1,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = if (checked) 22.dp else 8.dp, end = if (checked) 6.dp else 8.dp),
         )
     }
 }

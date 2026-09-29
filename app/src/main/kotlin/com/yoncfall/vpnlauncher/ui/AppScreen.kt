@@ -1,5 +1,5 @@
 // Главный экран. Раскладка - порт ui/window.py (карточка 14,54,592x664 по
-// координатам VPN.ps1:84-222): секции ПОДПИСКА/СЕРВЕРЫ/РЕЖИМ/ИСКЛЮЧЕНИЯ,
+// координатам VPN.ps1:84-222): секции ПОДПИСКА/СЕРВЕРЫ/ИСКЛЮЧЕНИЯ,
 // кнопки подключения, LED+статус. Тексты и цвета дословно из window.py.
 // Логика кнопок (загрузка подписки, пинг, туннель) - AppViewModel (этап 7).
 //
@@ -7,6 +7,14 @@
 // поэтому внутри карточки вертикальный скролл; высоты контролов под палец;
 // строки списка 38dp (на десктопе ~16px); MessageBox -> встроенный диалог,
 // блокнот с журналом -> встроенный экран журнала (AppViewModel: header).
+// Правки после v2.0.0 (по отзывам с устройства): секция РЕЖИМ удалена -
+// режим на Android всегда TUN, выбирать нечего; обновление подписки -
+// кнопка-стрелка «⟳ Обновить» в строке ПОДПИСКА (перечитывает URL,
+// обновляет серверы и сразу перепинговывает), «Загрузить подписку» и
+// «⟳ Обновить» - цветом ACCENT как «ПОДКЛЮЧИТЬСЯ» (видны пользователю);
+// «Открыть лог» перенесено под статус внизу; «Добавить» в исключениях
+// убрано - пакет вводится в поле и подтверждается клавишей «Готово»
+// (onDone = addExclusion).
 package com.yoncfall.vpnlauncher.ui
 
 import android.app.Activity
@@ -110,8 +118,10 @@ fun AppScreen() {
                     Spacer(Modifier.height(6.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         GameButton(
+                            // акцентный цвет (kind=ACCENT, как у «ПОДКЛЮЧИТЬСЯ»):
+                            // главная кнопка секции, должна бросаться в глаза
                             if (ui.loadRunning) "Загрузка..." else "Загрузить подписку",
-                            ButtonKind.GHOST,
+                            ButtonKind.ACCENT,
                             Modifier.weight(208f),
                             enabled = !ui.loadRunning,
                             onClick = vm::loadSubscription,
@@ -123,9 +133,13 @@ fun AppScreen() {
                             enabled = !ui.pingRunning,
                             onClick = vm::pingAll,
                         )
+                        // обновление подписки «как в браузере»: перечитать
+                        // URL -> новые серверы -> автопинг (refreshSubscription);
+                        // акцентный цвет - вторая «главная» кнопка секции
                         GameButton(
-                            "Открыть лог", ButtonKind.GHOST, Modifier.weight(186f),
-                            onClick = vm::showLog,
+                            "⟳ Обновить", ButtonKind.ACCENT, Modifier.weight(130f),
+                            enabled = !ui.loadRunning,
+                            onClick = vm::refreshSubscription,
                         )
                     }
                     Spacer(Modifier.height(6.dp))
@@ -187,24 +201,8 @@ fun AppScreen() {
                     DividerView()
                     Spacer(Modifier.height(10.dp))
 
-                    // --- РЕЖИМ (window.py:135-142) ---
-                    CapsLabel("РЕЖИМ")
-                    Spacer(Modifier.height(3.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        GameRadio(
-                            // Android: не «нужен админ» (это desktop/UAC), а
-                            // системное согласие VpnService (диалог при подключении).
-                            // Системного прокси на Android нет - кнопка режима
-                            // «proxy» удалена (deviation: только TUN)
-                            "Весь трафик - TUN",
-                            checked = ui.mode == "tun",
-                            onClick = { vm.selectMode("tun") },
-                            modifier = Modifier.weight(270f),
-                        )
-                    }
-                    Spacer(Modifier.height(5.dp))
-                    DividerView()
-                    Spacer(Modifier.height(10.dp))
+                    // --- РЕЖИМ удалён (правка после v2.0.0): на Android
+                    // режим всегда TUN, единственное радио без выбора ---
 
                     // --- ИСКЛЮЧЕНИЯ (window.py:147-170) ---
                     Row(
@@ -254,18 +252,14 @@ fun AppScreen() {
                                 onDone = vm::addExclusion,
                             )
                             Spacer(Modifier.height(4.dp))
-                            Row {
-                                GameButton(
-                                    "Добавить", ButtonKind.GHOST,
-                                    Modifier.weight(138f), height = 36.dp,
-                                    onClick = vm::addExclusion,
-                                )
-                                GameButton(
-                                    "Приложения", ButtonKind.GHOST,
-                                    Modifier.weight(148f), height = 36.dp,
-                                    onClick = vm::showAppPicker,
-                                )
-                            }
+                            // «Добавить» убрана (правка после v2.0.0):
+                            // ввод пакета подтверждается клавишей «Готово»
+                            // (onDone = addExclusion), picker добавляет сам
+                            GameButton(
+                                "Приложения", ButtonKind.GHOST,
+                                Modifier.fillMaxWidth(), height = 36.dp,
+                                onClick = vm::showAppPicker,
+                            )
                             Spacer(Modifier.height(4.dp))
                             Row {
                                 GameButton(
@@ -336,6 +330,14 @@ fun AppScreen() {
                             maxLines = 1,
                         )
                     }
+                    Spacer(Modifier.height(8.dp))
+                    // «Открыть лог» перенесено вниз (правка после v2.0.0):
+                    // сверху освободили место под кнопку обновления подписки
+                    GameButton(
+                        "Открыть лог", ButtonKind.GHOST,
+                        Modifier.fillMaxWidth(), height = 36.dp,
+                        onClick = vm::showLog,
+                    )
                 }
             }
         }

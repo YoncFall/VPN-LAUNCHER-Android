@@ -37,7 +37,7 @@ object Theme {
     val BorderFocus = rgb(0, 200, 240)
     val Placeholder = rgb(110, 118, 136)
     val DisabledText = rgb(74, 81, 98) // button.py _DISABLED_TEXT
-    val RadioTextOff = rgb(150, 158, 176) // radio.py не выбрана
+    // RadioTextOff удалён вместе с GameRadio (секции РЕЖИМ на Android нет)
 }
 
 /** Набор шрифтов theme.py f_* (размеры pt -> sp). */
