@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Тёмная тема в палитре приложения (theme.py: Bg/Bg2): окно старта
+     совпадает с фоном AppScreen, иконки статус-бара светлые. -->
+<resources>
+    <style name="Theme.VpnLauncher" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0C0E13</item>
+        <item name="android:statusBarColor">#12151D</item>
+        <item name="android:navigationBarColor">#0C0E13</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

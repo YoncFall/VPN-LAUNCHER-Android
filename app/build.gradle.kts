@@ -47,6 +47,11 @@ android {
             useLegacyPackaging = true
         }
     }
+
+    sourceSets {
+        // Kotlin-исходники приложения лежат в src/main/kotlin (как в :core)
+        getByName("main").java.srcDir("src/main/kotlin")
+    }
 }
 
 kotlin {

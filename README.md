@@ -9,7 +9,7 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
 - `:core` — порт desktop-ядра с golden-паритетом к 1.0.6 (фикстуры и
   эталоны копии из vpn-launcher-py/tests).
 
-## Статус: этапы 1-4 (:core полностью с golden-паритетом)
+## Статус: этапы 1-5 (:core с golden-паритетом, Compose-раскладка собирается)
 
 - `:core` — порт desktop-ядра: b64, URI-хелперы, TLS/транспорт,
   парсеры vless/vmess/trojan/ss/hysteria2/tuic, подписка (http/`file://`/путь),
@@ -21,7 +21,11 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
   conftest.py desktop-проекта).
 - `gradlew :core:test` — **30 зелёных** (в т.ч. контроль кириллицы в строках,
   логические тесты конфига — порт tests/test_config.py).
-- Дальше: Compose-раскладка (этап 5), VpnService + libbox (этап 6).
+- `:app` — MainActivity + Compose-раскладка в игровом стиле (порт window.py
+  и виджетов theme.ps1: карточка с акцентными краями, кнопки/поля/радио/LED,
+  секции ПОДПИСКА/СЕРВЕРЫ/РЕЖИМ/ИСКЛЮЧЕНИЯ, статус); `assembleDebug`
+  собирает APK (скриншот-сверка с desktop — на устройстве, этап 8).
+- Дальше: VpnService + libbox (этап 6), воркеры и логика (этап 7).
 
 ## Сборка
 
