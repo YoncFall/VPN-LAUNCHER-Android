@@ -39,6 +39,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true // BuildConfig.DEBUG — флаги libbox (fixAndroidStack и др.)
     }
 
     packaging {

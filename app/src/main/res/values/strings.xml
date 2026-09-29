@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VPN LAUNCHER</string>
+
+    <!-- foreground-уведомление туннеля (этап 6) -->
+    <string name="notif_channel">VPN</string>
+    <string name="notif_starting">Туннель запускается…</string>
+    <string name="notif_started">Туннель активен</string>
 </resources>

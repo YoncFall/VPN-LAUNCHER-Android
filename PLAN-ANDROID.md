@@ -1,11 +1,13 @@
 # VPN LAUNCHER — план Android-версии
 
-Дата: 2026-09-29. Статус: **этапы 1-5 готовы** (коммиты `0af375e`, `1fe8370`
-+ коммит этапа 5): тулчейн установлен, скаффолд собирается, `:core` портирован
-и держит golden-паритет (`gradlew :core:test` — 30 зелёных: парсеры подписки,
-сборка конфига, сверка с эталонами PS 5.1 `parse-nodes*.json`/`config-*.json` +
-прогон через `sing-box check`), `:app` собирает debug-APK с Compose-раскладкой
-в игровом стиле. Рядом лежат `../VPN-LAUNCHER-src`
+Дата: 2026-09-29. Статус: **этапы 1-6 готовы** (коммиты `0af375e`, `1fe8370`,
+`a7a405d` + коммит этапа 6): тулчейн установлен, скаффолд собирается, `:core`
+портирован и держит golden-паритет (`gradlew :core:test` — 30 зелёных: парсеры
+подписки, сборка конфига, сверка с эталонами PS 5.1 `parse-nodes*.json`/
+`config-*.json` + прогон через `sing-box check`), `:app` собирает debug-APK:
+Compose-раскладка в игровом стиле + VpnService-мост libbox (CommandServer,
+PlatformInterface/openTun, монитор сети, foreground-нотификация; подъём VPN
+проверяется на устройстве — этап 8). Рядом лежат `../VPN-LAUNCHER-src`
 (v1.0.6, эталон поведения) и `../vpn-launcher-py` (desktop-переписка,
 этапы 1-2 готовы).
 
@@ -70,7 +72,7 @@ TUN-туннель, с сохранением **golden-паритета с 1.0.6
 | 3 | `:core`: порт парсеров URI/протоколов + golden `parse-nodes*.json` | **готово** |
 | 4 | `:core`: сборка конфига + golden `config-*.json` + `sing-box check` | **готово**: 30 тестов зелёные |
 | 5 | `:app`: MainActivity + Compose-раскладка в игровом стиле (поле, кнопки, секции, радио, статус) | **готово**: APK собирается; скриншот-сверка — на устройстве (этап 8) |
-| 6 | VpnService + libbox-мост: fetchLibbox, PlatformInterface, CommandServer, уведомление | VPN поднимается на устройстве |
+| 6 | VpnService + libbox-мост: fetchLibbox, PlatformInterface, CommandServer, уведомление | **код готов**: поднимает CommandServer/openTun/монитор сети, FGS systemExempted; подъём VPN проверяется на устройстве (этап 8) |
 | 7 | Воркеры: подписка (HTTP), TCP-пинг, выбор ноды, режимы TUN/proxy | UX как desktop |
 | 8 | Сборка release APK, установка, E2E-прогон | готовый продукт |
 

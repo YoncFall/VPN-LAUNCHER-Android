@@ -9,7 +9,7 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
 - `:core` — порт desktop-ядра с golden-паритетом к 1.0.6 (фикстуры и
   эталоны копии из vpn-launcher-py/tests).
 
-## Статус: этапы 1-5 (:core с golden-паритетом, Compose-раскладка собирается)
+## Статус: этапы 1-6 (:core с golden-паритетом, раскладка и VpnService собираются)
 
 - `:core` — порт desktop-ядра: b64, URI-хелперы, TLS/транспорт,
   парсеры vless/vmess/trojan/ss/hysteria2/tuic, подписка (http/`file://`/путь),
@@ -25,7 +25,14 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
   и виджетов theme.ps1: карточка с акцентными краями, кнопки/поля/радио/LED,
   секции ПОДПИСКА/СЕРВЕРЫ/РЕЖИМ/ИСКЛЮЧЕНИЯ, статус); `assembleDebug`
   собирает APK (скриншот-сверка с desktop — на устройстве, этап 8).
-- Дальше: VpnService + libbox (этап 6), воркеры и логика (этап 7).
+- **VpnService-мост libbox (этап 6)**: `VpnServiceImpl` (CommandServer
+  lifecycle + Libbox.setup + foreground-нотификация systemExempted по
+  образцу SFA), `PlatformBridge` (openTun: адреса/маршруты/per-app из
+  TunOptions, protect(fd), getInterfaces, findConnectionOwner API 29+),
+  `NetworkMonitor` (монитор дефолтной сети), уведомления движка;
+  отклонения от SFA задокументированы в докстрингах (нет shell/root/bridge,
+  exclude-маршруты режет правило LOCAL_CIDRS конфига).
+- Дальше: воркеры и логика подключения (этап 7), устройство/E2E (этап 8).
 
 ## Сборка
 
