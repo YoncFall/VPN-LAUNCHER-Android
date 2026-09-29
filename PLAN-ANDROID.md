@@ -8,8 +8,9 @@ versionName 2.0.0), Compose-раскладка в игровом стиле + Vp
 libbox (CommandServer, PlatformInterface/openTun, монитор сети,
 foreground-нотификация) + логика подключения (загрузка подписки/пинг/кнопки,
 AppViewModel); подъём/сброс VPN, согласие, автозагрузка и переподключение
-проверены на TECNO SPARK Go 2 (Android 15, 720x1600) — осталась публикация
-android-репо и карточки на сайте. Рядом лежат `../VPN-LAUNCHER-src`
+проверены на TECNO SPARK Go 2 (Android 15, 720x1600); репо опубликовано
+(`YoncFall/VPN-LAUNCHER-Android`, релиз v2.0.0), карточка Android на сайте.
+Рядом лежат `../VPN-LAUNCHER-src`
 (v1.0.6, эталон поведения) и `../vpn-launcher-py` (desktop-переписка,
 этапы 1-2 готовы).
 

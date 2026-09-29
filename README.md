@@ -84,7 +84,11 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
   6. Строка режима на Android — «Весь трафик - TUN» (короче desktop-ной
      «Весь трафик - TUN (нужен админ)»: TUN на Android не требует
      прав администратора; комментарий в `AppScreen.kt`).
-- Дальше: публикация android-репо и карточки на сайте (E2E пройден).
+- **Опубликовано**: репо https://github.com/YoncFall/VPN-LAUNCHER-Android
+  (GPL-3.0), релиз **v2.0.0** с APK под стабильными именами
+  (`releases/latest/download/VPN-LAUNCHER.apk` + arm64-v8a/armeabi-v7a),
+  карточка Android на сайте https://yoncfall.github.io/ (скриншот — без
+  URL подписки).
 
 ## Сборка
 
