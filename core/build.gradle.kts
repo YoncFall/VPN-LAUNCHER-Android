@@ -11,7 +11,9 @@ java {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    // api: типы kotlinx.serialization (JsonObject нод) входят в публичный
+    // API (:app собирает/разбирает ноды) - на compile classpath потребителя
+    api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     testImplementation("junit:junit:4.13.2")
 }
 

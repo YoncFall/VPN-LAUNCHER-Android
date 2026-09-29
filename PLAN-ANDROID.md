@@ -1,13 +1,15 @@
 # VPN LAUNCHER — план Android-версии
 
-Дата: 2026-09-29. Статус: **этапы 1-6 готовы** (коммиты `0af375e`, `1fe8370`,
-`a7a405d` + коммит этапа 6): тулчейн установлен, скаффолд собирается, `:core`
-портирован и держит golden-паритет (`gradlew :core:test` — 30 зелёных: парсеры
-подписки, сборка конфига, сверка с эталонами PS 5.1 `parse-nodes*.json`/
-`config-*.json` + прогон через `sing-box check`), `:app` собирает debug-APK:
-Compose-раскладка в игровом стиле + VpnService-мост libbox (CommandServer,
-PlatformInterface/openTun, монитор сети, foreground-нотификация; подъём VPN
-проверяется на устройстве — этап 8). Рядом лежат `../VPN-LAUNCHER-src`
+Дата: 2026-09-29. Статус: **этапы 1-7 готовы** (коммиты `0af375e`, `1fe8370`,
+`a7a405d`, `cb1cc5d` + коммит этапа 7): тулчейн установлен, скаффолд
+собирается, `:core` портирован и держит golden-паритет (`gradlew :core:test`
+— 35 зелёных: парсеры подписки, сборка конфига, TCP-пинг, состояние, сверка с
+эталонами PS 5.1 `parse-nodes*.json`/`config-*.json` + прогон через
+`sing-box check`), `:app` собирает debug-APK: Compose-раскладка в игровом
+стиле + VpnService-мост libbox (CommandServer, PlatformInterface/openTun,
+монитор сети, foreground-нотификация) + логика подключения (загрузка
+подписки/пинг/кнопки, AppViewModel); подъём VPN проверяется на устройстве —
+этап 8). Рядом лежат `../VPN-LAUNCHER-src`
 (v1.0.6, эталон поведения) и `../vpn-launcher-py` (desktop-переписка,
 этапы 1-2 готовы).
 
@@ -73,7 +75,7 @@ TUN-туннель, с сохранением **golden-паритета с 1.0.6
 | 4 | `:core`: сборка конфига + golden `config-*.json` + `sing-box check` | **готово**: 30 тестов зелёные |
 | 5 | `:app`: MainActivity + Compose-раскладка в игровом стиле (поле, кнопки, секции, радио, статус) | **готово**: APK собирается; скриншот-сверка — на устройстве (этап 8) |
 | 6 | VpnService + libbox-мост: fetchLibbox, PlatformInterface, CommandServer, уведомление | **код готов**: поднимает CommandServer/openTun/монитор сети, FGS systemExempted; подъём VPN проверяется на устройстве (этап 8) |
-| 7 | Воркеры: подписка (HTTP), TCP-пинг, выбор ноды, режимы TUN/proxy | UX как desktop |
+| 7 | Воркеры: подписка (HTTP), TCP-пинг, выбор ноды, режимы TUN/proxy | **готово**: `AppViewModel` (порт обработчиков VPN.ps1: загрузка/пинг с прогрессом/исключения с валидацией/.connect/disconnect/testcfg/egress-IP), `VpnRuntime` (состояние сервиса), согласие `VpnService.prepare` вместо UAC, `Libbox.checkConfig(json)`, журнал-экран; отклонения — в докстринге AppViewModel; подъём VPN — этап 8 |
 | 8 | Сборка release APK, установка, E2E-прогон | готовый продукт |
 
 ## Окружение (сегодня)

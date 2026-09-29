@@ -60,6 +60,9 @@ class VpnServiceImpl : VpnService() {
         /** Согласие системы: null = уже выдано, иначе Intent для startActivityForResult. */
         fun prepare(context: Context): Intent? = VpnService.prepare(context)
 
+        /** Libbox.setup (idempotent) для проверки конфига из UI до старта сервиса. */
+        fun ensureReady(context: Context) = ensureSetup(context.applicationContext)
+
         /** Запуск туннеля: пишет последний конфиг (для always-on) и поднимает сервис. */
         fun start(context: Context, configPath: String) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -119,6 +122,10 @@ class VpnServiceImpl : VpnService() {
 
     private val engineLock = Any()
     private lateinit var executor: ExecutorService
+
+    /** Идёт закрытие (onDestroy): остановку движка не считаем аварией. */
+    @Volatile
+    private var closing = false
 
     @Volatile
     private var commandServer: CommandServer? = null
@@ -181,6 +188,7 @@ class VpnServiceImpl : VpnService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        closing = true
         // single-thread executor: закрытие встанет ПОСЛЕ текущей операции старта
         executor.execute {
             NetworkMonitor.setListener(null, connectivity)
@@ -198,6 +206,11 @@ class VpnServiceImpl : VpnService() {
                 Log.i(TAG, "engine closed")
                 AppLog.write("движок остановлен")
             }
+            // чистая остановка -> IDLE; FAILED остаётся (текст ошибки в UI)
+            val st = VpnRuntime.state.value
+            if (st == VpnRuntime.State.STARTING || st == VpnRuntime.State.CONNECTED) {
+                VpnRuntime.state.value = VpnRuntime.State.IDLE
+            }
         }
         executor.shutdown()
     }
@@ -208,6 +221,7 @@ class VpnServiceImpl : VpnService() {
         executor.execute {
             synchronized(engineLock) {
                 if (commandServer != null) return@execute // уже поднят
+                VpnRuntime.state.value = VpnRuntime.State.STARTING
                 try {
                     ensureSetup(applicationContext)
                     val server = CommandServer(
@@ -231,6 +245,7 @@ class VpnServiceImpl : VpnService() {
                 Log.i(TAG, "service started")
                 AppLog.write("туннель поднят")
                 updateNotification(getString(R.string.notif_started))
+                VpnRuntime.state.value = VpnRuntime.State.CONNECTED
             } catch (e: Throwable) {
                 Log.e(TAG, "startOrReloadService: ${e.message}", e)
                 AppLog.write("startOrReloadService: ${e.message}")
@@ -259,6 +274,14 @@ class VpnServiceImpl : VpnService() {
     /** Остановка по запросу движка (serviceStop). */
     fun engineStopRequested() {
         AppLog.write("движок запросил остановку")
+        if (!closing) {
+            // движок остановился сам (runtime error) - как обрыв соединения
+            // в 1.0.6 (Tick: 'Соединение оборвалось...', VPN.ps1:626)
+            VpnRuntime.statusText = "Соединение оборвалось - sing-box завершился, смотри лог"
+            VpnRuntime.dialogTitle = null
+            VpnRuntime.dialogText = null
+            VpnRuntime.state.value = VpnRuntime.State.FAILED
+        }
         stopAll()
     }
 
@@ -271,6 +294,11 @@ class VpnServiceImpl : VpnService() {
         // сообщение уже продублировано в logcat; гасим сервис, чтобы не
         // висела foreground-нотификация с ошибкой
         Log.e(TAG, "start failed: $message")
+        AppLog.write("connect ERROR: $message")
+        VpnRuntime.statusText = "Не удалось подключиться"
+        VpnRuntime.dialogTitle = "Ошибка подключения"
+        VpnRuntime.dialogText = message
+        VpnRuntime.state.value = VpnRuntime.State.FAILED
         stopAll()
     }
 

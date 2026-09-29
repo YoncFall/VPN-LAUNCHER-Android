@@ -297,6 +297,7 @@ fun GameField(
     placeholder: String,
     modifier: Modifier = Modifier,
     height: Dp = 44.dp,
+    onDone: (() -> Unit)? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(7.dp)
@@ -319,6 +320,13 @@ fun GameField(
             textStyle = Fonts.Body.copy(color = Theme.Text),
             cursorBrush = SolidColor(Theme.Accent),
             singleLine = true,
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                imeAction = if (onDone != null) androidx.compose.ui.text.input.ImeAction.Done
+                else androidx.compose.ui.text.input.ImeAction.Default,
+            ),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                onDone = if (onDone != null) { { onDone() } } else null,
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
     }
