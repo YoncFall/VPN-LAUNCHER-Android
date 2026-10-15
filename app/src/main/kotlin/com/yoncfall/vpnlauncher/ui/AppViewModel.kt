@@ -188,14 +188,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshSubscription() = loadImpl(quiet = false, afterSuccess = { pingAll() })
 
     /**
-     * Загрузка подписки «шлейфом»: 1 запрос DownloadManager + 6 прямых
-     * HttpURLConnection одновременно, побеждает первый успех.
+     * Загрузка подписки «шлейфом»: 1 запрос DownloadManager + волны по 6
+     * прямых HttpURLConnection, побеждает первый успех.
      *
      * Причина (диагностика 15.10.2026): HiOS/UNISOC держит первые данные
      * новых TLS-соединений только нашего пакета (~40-46 с, затем отпускает),
-     * но держатель с конечной ёмкостью - часть параллельных соединений
-     * проходит мгновенно. С 7 параллельными запросами холодная загрузка
-     * подписки идёт ~1 с (4/4 проверки), худший случай не хуже старого.
+     * но держатель с конечной и плавающей ёмкостью - часть параллельных
+     * соединений проходит мгновенно. Волны наращивают число запросов:
+     * если через 2.5 с никто не выиграл - добавляется ещё 6. Типичная
+     * загрузка ~1-4 с; даже если держатель взял всё - старый путь (~40 с)
+     * остаётся худшим случаем и не ухудшается.
      *
      * Провал DM-пути возвращает null за ≤15 с и не задерживает остальных.
      * Если все пути неудачны - летит исключение прямого запроса.
@@ -210,45 +212,64 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         var result: List<JsonObject>? = null
         var firstError: Throwable? = null
         var failed = 0
-        val finished = java.util.concurrent.CountDownLatch(7)
+        var spawned = 0
         fun done(r: List<JsonObject>): List<JsonObject> {
             AppLog.write("subscription loaded in ${System.currentTimeMillis() - t0}ms")
             return r
         }
-        fun finish(r: List<JsonObject>?, t: Throwable?) {
+        fun finish(r: List<JsonObject>?, e: Throwable?) {
             synchronized(lock) {
                 if (result == null) {
                     if (r != null) {
                         result = r
                     } else {
                         failed++
-                        if (firstError == null && t != null) firstError = t
+                        if (firstError == null && e != null) firstError = e
                     }
                 }
             }
-            finished.countDown()
         }
-        thread(name = "sub-dm") {
+        fun won(): Boolean = synchronized(lock) { result != null }
+        fun spawn(name: String, block: () -> Unit) {
+            synchronized(lock) { spawned++ }
+            thread(name = name) { block() }
+        }
+        spawn("sub-dm") {
             try {
                 finish(DmSubscription.fetchNodes(app, url, AppLog::write), null)
             } catch (_: Throwable) {
                 finish(null, null) // сбой DM не фатален, лог уже внутри
             }
         }
-        // Шлейф прямых запросов: если держатель держит лишь конечное число
-        // соединений одновременно, лишние пройдут сразу. Побеждает первый успех.
-        for (i in 1..6) {
-            thread(name = "sub-direct-$i") {
-                try {
-                    finish(fetchNodes(url, logger = {}), null)
-                } catch (t: Throwable) {
-                    finish(null, t)
+        // Волны шлейфа: держатель HiOS держит лишь конечное число новых
+        // соединений нашего пакета одновременно (ёмкость плавает) - лишние
+        // проходят сразу. Не выиграло за 2.5 с - добавляем ещё 6 запросов.
+        for (wave in 1..3) {
+            for (i in 1..6) {
+                spawn("sub-direct-$wave-$i") {
+                    try {
+                        finish(fetchNodes(url, logger = {}), null)
+                    } catch (e: Throwable) {
+                        finish(null, e)
+                    }
                 }
+            }
+            if (wave < 3) {
+                val deadline = System.currentTimeMillis() + 2500
+                while (System.currentTimeMillis() < deadline && !won()) {
+                    Thread.sleep(100)
+                }
+                if (won()) break
             }
         }
         while (true) {
-            synchronized(lock) { result?.let { return done(it) } }
-            if (finished.await(200, TimeUnit.MILLISECONDS)) break
+            var stop = false
+            synchronized(lock) {
+                result?.let { return done(it) }
+                stop = spawned > 0 && failed >= spawned
+            }
+            if (stop) break
+            Thread.sleep(100)
         }
         synchronized(lock) {
             result?.let { return done(it) }
