@@ -29,8 +29,10 @@ package com.yoncfall.vpnlauncher.ui
 
 import android.app.Application
 import android.content.Intent
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.yoncfall.vpnlauncher.DmSubscription
 import com.yoncfall.vpnlauncher.core.AppLog
 import com.yoncfall.vpnlauncher.core.ConfigError
 import com.yoncfall.vpnlauncher.core.VpnState
@@ -48,6 +50,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
+import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -132,7 +135,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        AppLog.sink = { msg -> appendLog(msg) }
+        // sink + logcat (E: на HiOS видны только ошибки приложений) — журнал
+        // переживает гибель процесса и читается через adb logcat -s VpnLauncher:E
+        AppLog.sink = { msg ->
+            appendLog(msg)
+            Log.e("VpnLauncher", msg)
+        }
         viewModelScope.launch {
             VpnRuntime.state.collect { onRuntime(it) }
         }
@@ -180,6 +188,76 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshSubscription() = loadImpl(quiet = false, afterSuccess = { pingAll() })
 
     /**
+     * Загрузка подписки «шлейфом»: 1 запрос DownloadManager + 6 прямых
+     * HttpURLConnection одновременно, побеждает первый успех.
+     *
+     * Причина (диагностика 15.10.2026): HiOS/UNISOC держит первые данные
+     * новых TLS-соединений только нашего пакета (~40-46 с, затем отпускает),
+     * но держатель с конечной ёмкостью - часть параллельных соединений
+     * проходит мгновенно. С 7 параллельными запросами холодная загрузка
+     * подписки идёт ~1 с (4/4 проверки), худший случай не хуже старого.
+     *
+     * Провал DM-пути возвращает null за ≤15 с и не задерживает остальных.
+     * Если все пути неудачны - летит исключение прямого запроса.
+     *
+     * Реализация на потоках, а не корутинах: блокирующий HttpURLConnection
+     * не реагирует на cancel(), coroutineScope ждал бы его завершения.
+     */
+    private fun fetchNodesRacing(url: String): List<JsonObject> {
+        val app = getApplication<Application>()
+        val t0 = System.currentTimeMillis()
+        val lock = Any()
+        var result: List<JsonObject>? = null
+        var firstError: Throwable? = null
+        var failed = 0
+        val finished = java.util.concurrent.CountDownLatch(7)
+        fun done(r: List<JsonObject>): List<JsonObject> {
+            AppLog.write("subscription loaded in ${System.currentTimeMillis() - t0}ms")
+            return r
+        }
+        fun finish(r: List<JsonObject>?, t: Throwable?) {
+            synchronized(lock) {
+                if (result == null) {
+                    if (r != null) {
+                        result = r
+                    } else {
+                        failed++
+                        if (firstError == null && t != null) firstError = t
+                    }
+                }
+            }
+            finished.countDown()
+        }
+        thread(name = "sub-dm") {
+            try {
+                finish(DmSubscription.fetchNodes(app, url, AppLog::write), null)
+            } catch (_: Throwable) {
+                finish(null, null) // сбой DM не фатален, лог уже внутри
+            }
+        }
+        // Шлейф прямых запросов: если держатель держит лишь конечное число
+        // соединений одновременно, лишние пройдут сразу. Побеждает первый успех.
+        for (i in 1..6) {
+            thread(name = "sub-direct-$i") {
+                try {
+                    finish(fetchNodes(url, logger = {}), null)
+                } catch (t: Throwable) {
+                    finish(null, t)
+                }
+            }
+        }
+        while (true) {
+            synchronized(lock) { result?.let { return done(it) } }
+            if (finished.await(200, TimeUnit.MILLISECONDS)) break
+        }
+        synchronized(lock) {
+            result?.let { return done(it) }
+            firstError?.let { throw it }
+        }
+        throw IllegalStateException("подписка не загрузилась")
+    }
+
+    /**
      * quiet=true: стартовая автозагрузка - ошибки только статусом, без диалога.
      * afterSuccess вызывается уже после сброса пингов/выделения (в finally),
      * чтобы автопинг не затёрся очисткой.
@@ -198,7 +276,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             var ok = false
             try {
-                val fetched = fetchNodes(url)
+                // Гонка двух путей загрузки (диагностика 15.10.2026): HiOS держит
+                // почти все новые TLS-соединения нашего uid (~40-46 с), а
+                // DownloadManager проходит мгновенно (~2 с), но нестабильно
+                // (~2 попытки из 10). Идут параллельно, побеждает первый успех:
+                // провал одного пути не задерживает второй.
+                val fetched = fetchNodesRacing(url)
                 _state.update {
                     it.copy(
                         nodes = fetched,
