@@ -157,7 +157,9 @@ Android-версия VPN LAUNCHER (см. [PLAN-ANDROID.md](PLAN-ANDROID.md)).
   причины) после выяснения удалён.
 - **Опубликовано**: репо https://github.com/YoncFall/VPN-LAUNCHER-Android
   (GPL-3.0), релизы **v2.0.0** (первый), **v2.0.1** (безопасность + правки
-  UI по отзывам), **v2.0.2/v2.0.3** (быстрая загрузка подписки) с APK под
+  UI по отзывам), **v2.0.2/v2.0.3** (быстрая загрузка подписки),
+  **v2.0.4** (чистые домены: ВК/Ozon/WB/Одноклассники/Яндекс.Музыка идут
+  напрямую мимо VPN, антифрод не видит чужой datacenter-IP) с APK под
   стабильными именами
   (`releases/latest/download/VPN-LAUNCHER.apk` + arm64-v8a/armeabi-v7a),
   карточка Android на сайте https://yoncfall.github.io/ (скриншот — без

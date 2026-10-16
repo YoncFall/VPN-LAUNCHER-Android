@@ -41,6 +41,30 @@ val GAME_SAFE_PROCESSES: List<String> = listOf(
     "GTA5.exe", "GTA5_3258.exe", "ragemp_v.exe", "cs2.exe",
 )
 
+// Чистые домены: сервисы с антифродом и гео-проверкой (ВК, Ozon, Wildberries,
+// Одноклассники, Яндекс.Музыка) всегда идут НАПРЯМУЮ, мимо туннеля. Иначе они
+// видят IP чужого датацентра и блокируют вход (диагностика «взлома ВК»
+// 12-13.10.2026: вк.cc/cTG0lv - ложная тревога антифрода из-за VPN/обхода ТСПУ).
+// Список нельзя потерять - он в коде, как GAME_SAFE_PROCESSES.
+//
+// Матчинг: apex - поле domain (точное совпадение), поддомены - domain_suffix с
+// ВЕДУЩЕЙ ТОЧКИ ("." + apex). Сuffix без точки ловил бы notvk.com под vk.com;
+// suffix с точкой матчит m.vk.com, но не apex и не посторонние домены, поэтому
+// apex держим отдельно через domain. Работает при любом поведении движка.
+val CLEAN_DOMAINS: List<String> = listOf(
+    // ВКонтакте
+    "vk.com", "vk.ru", "vk.cc", "userapi.com", "vkvideo.ru",
+    // Ozon
+    "ozon.ru", "ozon.com", "ozon.kz", "ozon.by", "ozonusercontent.com", "ozone.ru",
+    // Wildberries
+    "wildberries.ru", "wb.ru", "wbbasket.ru", "wb-basket.ru", "geobasket.ru", "wbpay.ru", "paywb.com", "rwb.ru",
+    // Одноклассники
+    "ok.ru", "odnoklassniki.ru", "okcdn.ru", "odkl.ru", "mycdn.me",
+    // Яндекс.Музыка (только сервис музыки; общая инфраструктура Яндекса,
+    // например passport/avatars, сознательно не входит - вне объёма)
+    "music.yandex.ru",
+)
+
 const val DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
 
 /** vpn_launcher.paths.SOCKS_PORT. */
@@ -149,6 +173,17 @@ fun buildSingBoxConfig(
     rules.add(buildJsonObject {
         put("protocol", "dns")
         put("action", "hijack-dns")
+    })
+
+    // чистые домены идут напрямую: антифрод этих сервисов не должен видеть IP
+    // туннеля (см. CLEAN_DOMAINS). После sniff/hijack-dns (домен уже извлечён),
+    // до per-app, чтобы чистый домен выигрывал у любого процесса. apex через
+    // domain (точное совпадение), поддомены - через domain_suffix с ведущей точкой.
+    rules.add(buildJsonObject {
+        put("action", "route")
+        put("domain", JsonArray(CLEAN_DOMAINS.map { JsonPrimitive(it) }))
+        put("domain_suffix", JsonArray(CLEAN_DOMAINS.map { JsonPrimitive(".$it") }))
+        put("outbound", "direct")
     })
 
     // per-app: перечисленные приложения идут НАПРЯМУЮ (важно для игр/античита)

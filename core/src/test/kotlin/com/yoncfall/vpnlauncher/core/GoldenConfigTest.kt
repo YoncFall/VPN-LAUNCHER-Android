@@ -10,7 +10,11 @@
 package com.yoncfall.vpnlauncher.core
 
 import java.io.File
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume
@@ -22,6 +26,29 @@ class GoldenConfigTest {
         parseNodeList(fixtureText("subscription.txt")) { }
     }
 
+    /**
+     * Конфиг в том виде, какой дал бы оригинальный core.ps1 1.0.6.
+     *
+     * Golden сняты PowerShell-версией, у которой нет правила чистых домен
+     * (CLEAN_DOMAINS, см. core/Config.kt): с 13.10.2026 Kotlin-версия
+     * сознательно уходит от паритета, чтобы антифрод ВК/Ozon/WB не видел IP
+     * туннеля. Для сравнения с эталоном это правило вырезается; фактическое
+     * содержимое правила проверяет ConfigTest.clean domains route direct
+     * after sniff before per-app.
+     */
+    private fun psParityView(built: JsonObject): JsonObject {
+        val rules = built["route"]!!.jsonObject["rules"]!!.jsonArray
+        val kept = JsonArray(rules.filter { r -> "domain" !in r.jsonObject })
+        val route = buildJsonObject {
+            built["route"]!!.jsonObject.forEach { (k, v) ->
+                put(k, if (k == "rules") kept else v)
+            }
+        }
+        return buildJsonObject {
+            built.forEach { (k, v) -> put(k, if (k == "route") route else v) }
+        }
+    }
+
     @Test
     fun `config tun matches golden`() {
         val built = buildSingBoxConfig(
@@ -30,7 +57,7 @@ class GoldenConfigTest {
             appList = listOf("mygame.exe", "steam.exe"),
             installRoot = "vpn-golden-root",
         )
-        assertEquals(goldenElement("config-tun.json"), built)
+        assertEquals(goldenElement("config-tun.json"), psParityView(built))
     }
 
     @Test
@@ -42,7 +69,7 @@ class GoldenConfigTest {
             onlySelected = true,
             installRoot = "vpn-golden-root",
         )
-        assertEquals(goldenElement("config-proxy-selected.json"), built)
+        assertEquals(goldenElement("config-proxy-selected.json"), psParityView(built))
     }
 
     @Test
@@ -54,7 +81,7 @@ class GoldenConfigTest {
             onlySelected = true,
             installRoot = "vpn-golden-root",
         )
-        assertEquals(goldenElement("config-single.json"), built)
+        assertEquals(goldenElement("config-single.json"), psParityView(built))
     }
 
     @Test

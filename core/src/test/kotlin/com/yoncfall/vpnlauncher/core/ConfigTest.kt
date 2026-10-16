@@ -162,25 +162,46 @@ class ConfigTest {
             twoNodes, mode = "tun", appList = listOf("mygame.exe"), installRoot = "r",
         )
         val rules = c["route"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
-        // sniff + dns hijack + process + local cidr
-        assertEquals(4, rules.size)
+        // sniff + dns hijack + чистые домены + process + local cidr
+        assertEquals(5, rules.size)
         assertEquals("sniff", rules[0]["action"]!!.jsonPrimitive.content)
         assertEquals("hijack-dns", rules[1]["action"]!!.jsonPrimitive.content)
-        val process = rules[2]
+        val process = rules[3]
         assertEquals("route", process["action"]!!.jsonPrimitive.content)
         assertEquals("direct", process["outbound"]!!.jsonPrimitive.content)
         val names = process["process_name"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertTrue(names.contains("mygame.exe"))
         assertTrue(names.contains("steam.exe"))
         assertTrue(names.contains("cs2.exe"))
-        assertEquals(7, rules[3]["ip_cidr"]!!.jsonArray.size)
+        assertEquals(7, rules[4]["ip_cidr"]!!.jsonArray.size)
     }
 
     @Test
     fun `proxy mode skips process rule`() {
         val c = buildSingBoxConfig(twoNodes, mode = "proxy", installRoot = "r")
         val rules = c["route"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(3, rules.size) // без per-app правила
+        assertEquals(4, rules.size) // sniff + dns + чистые домены + local cidr (без per-app)
+    }
+
+    @Test
+    fun `clean domains route direct after sniff before per-app`() {
+        for (mode in listOf("tun", "proxy")) {
+            val c = buildSingBoxConfig(twoNodes, mode = mode, installRoot = "r")
+            val rules = c["route"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+            // правило идёт сразу после sniff+hijack-dns (домен уже извлечён)
+            val rule = rules[2]
+            assertEquals("route", rule["action"]!!.jsonPrimitive.content)
+            assertEquals("direct", rule["outbound"]!!.jsonPrimitive.content)
+            // apex - точное совпадение, поддомены - suffix с ведущей точкой
+            val domain = rule["domain"]!!.jsonArray.map { it.jsonPrimitive.content }
+            val suffix = rule["domain_suffix"]!!.jsonArray.map { it.jsonPrimitive.content }
+            assertEquals(CLEAN_DOMAINS, domain)
+            assertEquals(CLEAN_DOMAINS.map { ".$it" }, suffix)
+            assertTrue(domain.contains("vk.com"))
+            assertTrue(suffix.contains(".music.yandex.ru"))
+            // защита от ложных срабатываний: notvk.com не должен попасть под vk.com
+            assertFalse(suffix.any { it == "vk.com" })
+        }
     }
 
     // ---------------- дедуп ----------------
