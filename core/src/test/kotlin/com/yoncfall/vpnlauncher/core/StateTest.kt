@@ -46,4 +46,15 @@ class StateTest {
         assertEquals("tun", raw["mode"]!!.jsonPrimitive.content)
         assertEquals(st, loadState(p))
     }
+
+    @Test
+    fun `dpi bypass roundtrip and legacy default`() {
+        val p = File(tmpDir(), "state.json")
+        // true переживает roundtrip
+        saveState(DEFAULT_STATE.copy(dpiBypass = true), p)
+        assertEquals(true, loadState(p).dpiBypass)
+        // старый state.json без поля -> false (консервативно)
+        p.writeText("""{"subUrl": "", "mode": "tun", "selected": "", "appList": [], "lastNodes": []}""", Charsets.UTF_8)
+        assertEquals(false, loadState(p).dpiBypass)
+    }
 }

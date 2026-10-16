@@ -32,6 +32,8 @@ data class VpnState(
     val appList: List<String> = emptyList(),
     val lastNodes: List<JsonObject> = emptyList(),
     val autoUrlTest: Boolean = true,
+    // обход ТСПУ (17.10.2026): фрагментация TLS-хэндшейка к серверу
+    val dpiBypass: Boolean = false,
 )
 
 val DEFAULT_STATE = VpnState()
@@ -61,6 +63,9 @@ fun loadState(path: File): VpnState {
             ?: DEFAULT_STATE.lastNodes,
         autoUrlTest = (obj["autoUrlTest"] as? JsonPrimitive)?.booleanOrNull
             ?: DEFAULT_STATE.autoUrlTest,
+        // старые state.json без поля -> false (консервативно: без обхода)
+        dpiBypass = (obj["dpiBypass"] as? JsonPrimitive)?.booleanOrNull
+            ?: DEFAULT_STATE.dpiBypass,
     )
 }
 
@@ -73,6 +78,7 @@ fun saveState(state: VpnState, path: File) {
         put("appList", JsonArray(state.appList.map { JsonPrimitive(it) }))
         put("lastNodes", JsonArray(state.lastNodes))
         put("autoUrlTest", state.autoUrlTest)
+        put("dpiBypass", state.dpiBypass)
     }
     val text = Json {
         prettyPrint = true

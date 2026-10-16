@@ -109,6 +109,7 @@ fun buildSingBoxConfig(
     appList: List<String> = emptyList(),
     testUrl: String = DEFAULT_TEST_URL,
     onlySelected: Boolean = false,
+    dpiBypass: Boolean = false,
     installRoot: String,
 ): JsonObject {
     if (mode != "tun" && mode != "proxy") {
@@ -134,6 +135,21 @@ fun buildSingBoxConfig(
         for (k in NODE_KEYS) {
             val v = n[k]
             if (v != null && v !is JsonNull) o[k] = v
+        }
+        // обход ТСПУ (запрос 17.10.2026): фрагментация TLS-хэндшейка к серверу -
+        // ТСПУ режет по SNI в ClientHello, а разрезанный хэндшейк не читается.
+        // record_fragment - хэндшейк в несколько TLS-записей (легче и быстрее,
+        // основной механизм), fragment - разрез ClientHello на TCP-сегменты с
+        // паузой (запасной, документация sing-box рекомендует начинать с первого).
+        // Поля - только в tls-блоке самого узла: наружу, к заблокированным
+        // ресурсам, трафик идёт через туннель уже в обфусцированном виде.
+        if (dpiBypass && o["tls"] is JsonObject) {
+            val tls = LinkedHashMap<String, JsonElement>()
+            (o["tls"] as JsonObject).forEach { (kk, vv) -> tls[kk] = vv }
+            tls["record_fragment"] = JsonPrimitive(true)
+            tls["fragment"] = JsonPrimitive(true)
+            tls["fragment_fallback_delay"] = JsonPrimitive("300ms")
+            o["tls"] = JsonObject(tls)
         }
         out.add(JsonObject(o))
         tags.add(n["tag"]!!.jsonPrimitive.content)
@@ -287,11 +303,12 @@ fun newSingBoxConfig(
     appList: List<String> = emptyList(),
     testUrl: String = DEFAULT_TEST_URL,
     onlySelected: Boolean = false,
+    dpiBypass: Boolean = false,
     installRoot: String,
     path: File,
     logger: (String) -> Unit = AppLog::write,
 ): File {
-    val cfg = buildSingBoxConfig(nodes, selected, mode, appList, testUrl, onlySelected, installRoot)
+    val cfg = buildSingBoxConfig(nodes, selected, mode, appList, testUrl, onlySelected, dpiBypass, installRoot)
     val p = writeConfig(cfg, path)
     if (mode == "tun") {
         val directApps = uniq(GAME_SAFE_PROCESSES + appList)
@@ -301,7 +318,8 @@ fun newSingBoxConfig(
     }
     val outCount = cfg["outbounds"]!!.jsonArray.size
     val finalTag = cfg["route"]!!.jsonObject["final"]!!.jsonPrimitive.content
-    logger("config written: $outCount outbounds, mode=$mode, final=$finalTag")
+    logger("config written: $outCount outbounds, mode=$mode, final=$finalTag" +
+        if (dpiBypass) ", dpi-bypass on" else "")
     return p
 }
 

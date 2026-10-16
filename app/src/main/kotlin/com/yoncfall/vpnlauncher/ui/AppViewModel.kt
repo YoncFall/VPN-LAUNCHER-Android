@@ -107,6 +107,7 @@ data class UiState(
     val logVisible: Boolean = false,
     val update: UpdateInfo? = null, // новая версия найдена - показать плашку
     val updateProgress: Int = -1, // -1 - не качается, иначе процент
+    val dpiBypass: Boolean = false, // обход ТСПУ: фрагментация TLS к серверу
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -123,6 +124,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // исключения = пакеты приложений; старые .exe-записи (настольный
             // порт) отбрасываем - они на Android бессмысленны
             exclusions = persisted.appList.filter { PACKAGE_RE.matcher(it).matches() },
+            dpiBypass = persisted.dpiBypass,
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -561,6 +563,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         save(persisted.copy(appList = emptyList()))
     }
 
+    // Переключатель обхода ТСПУ (кнопка «ТСПУ», запрос 17.10.2026).
+    // Конфиг строится при подключении, поэтому при работающем VPN эффект
+    // наступит только после переподключения - говорим об этом статусом.
+    fun toggleDpiBypass() {
+        val on = !_state.value.dpiBypass
+        _state.update { it.copy(dpiBypass = on) }
+        save(persisted.copy(dpiBypass = on))
+        if (_state.value.disconnectEnabled) {
+            _state.update {
+                it.copy(
+                    status = if (on) {
+                        "Обход ТСПУ включён - переподключись, чтобы применилось"
+                    } else {
+                        "Обход ТСПУ выключен - переподключись, чтобы применилось"
+                    },
+                    statusLevel = StatusLevel.WARN,
+                )
+            }
+        }
+    }
+
     // ----------------------------------------------------------- подключение
 
     fun connect() {
@@ -586,6 +609,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 appList = st.exclusions,
                 subUrl = st.subUrl.trim(),
                 selected = tags.joinToString(","),
+                dpiBypass = st.dpiBypass,
             ),
         )
         // цвет статуса не переназначаем (PS: ForeColor не менялся)
@@ -830,6 +854,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             mode = "tun",
             appList = st.exclusions,
             onlySelected = onlySelected,
+            dpiBypass = st.dpiBypass,
             installRoot = getApplication<Application>().filesDir.path,
             path = configFile,
         )

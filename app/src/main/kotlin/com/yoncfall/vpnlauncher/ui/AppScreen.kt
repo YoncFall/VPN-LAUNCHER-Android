@@ -301,6 +301,28 @@ fun AppScreen() {
                     Spacer(Modifier.height(10.dp))
 
                     // --- подключение (window.py:175-193) ---
+
+                    // обход ТСПУ (запрос 17.10.2026): как кнопка-ракета DPI на
+                    // ПК - один тогл, эффект при следующем подключении
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        CapsLabel("ОБХОД ТСПУ", Modifier.weight(1f))
+                        BasicText(
+                            "фрагментация TLS к серверу",
+                            style = Fonts.Sub.copy(color = Theme.TextDim),
+                            maxLines = 1,
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    GameButton(
+                        if (ui.dpiBypass) "ТСПУ: ВКЛ" else "ТСПУ: ВЫКЛ",
+                        if (ui.dpiBypass) ButtonKind.ACCENT else ButtonKind.GHOST,
+                        Modifier.fillMaxWidth(), height = 36.dp,
+                        onClick = vm::toggleDpiBypass,
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GameButton(
                             "ПОДКЛЮЧИТЬСЯ", ButtonKind.ACCENT,

@@ -280,10 +280,67 @@ class ConfigTest {
     @Test
     fun `missing engine raises io exception`() {
         try {
-            testSingBoxConfig(File("nonexistent.json"), File("no-such-engine-xyz.exe"))
+            testSingBoxConfig(File("nonexistent.json"), File("no-sing-box-xyz.exe"))
             fail("ожидали IOException")
         } catch (e: IOException) {
             // как FileNotFoundError в Python/PS
+        }
+    }
+
+    // ---------------- обход ТСПУ (dpiBypass, 17.10.2026) ----------------
+
+    @Test
+    fun `dpi bypass adds tls fragment fields`() {
+        val c = buildSingBoxConfig(twoNodes, dpiBypass = true, installRoot = "r")
+        val out = c["outbounds"]!!.jsonArray.map { it.jsonObject }
+        for (i in 0..1) {
+            val tls = out[i]["tls"]!!.jsonObject
+            // record_fragment - основа, fragment - запас, пауза фиксированная
+            // (на Android авто-детект wait time недоступен, фолбэк 300ms)
+            assertEquals(true, tls["record_fragment"]!!.jsonPrimitive.content.toBoolean())
+            assertEquals(true, tls["fragment"]!!.jsonPrimitive.content.toBoolean())
+            assertEquals("300ms", tls["fragment_fallback_delay"]!!.jsonPrimitive.content)
+            // исходные поля tls сохранены
+            assertEquals("s.example", tls["server_name"]!!.jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `dpi bypass off leaves tls untouched`() {
+        val c = buildSingBoxConfig(twoNodes, installRoot = "r")
+        val tls = c["outbounds"]!!.jsonArray[0].jsonObject["tls"]!!.jsonObject
+        assertFalse("fragment не должен появляться без dpiBypass" in tls.keys)
+        assertFalse("record_fragment не должен появляться без dpiBypass" in tls.keys)
+    }
+
+    @Test
+    fun `dpi bypass skips node without tls`() {
+        // узел без tls (например shadowsocks) не должен получить tls-блок
+        val n = buildJsonObject {
+            put("type", "shadowsocks")
+            put("tag", "ss-1")
+            put("server", "s.example")
+            put("server_port", 8388)
+            put("method", "2022-blake3-aes-128-gcm")
+            put("password", "p-1")
+        }
+        val c = buildSingBoxConfig(listOf(n), dpiBypass = true, installRoot = "r")
+        val out = c["outbounds"]!!.jsonArray[0].jsonObject
+        assertFalse("tls" in out.keys)
+    }
+
+    @Test
+    fun `new config logs dpi bypass`() {
+        val dir = tempDir()
+        try {
+            val logs = mutableListOf<String>()
+            newSingBoxConfig(
+                twoNodes, mode = "tun", dpiBypass = true, installRoot = "r",
+                path = File(dir, "config.json"),
+            ) { logs.add(it) }
+            assertTrue(logs.last().endsWith("dpi-bypass on"))
+        } finally {
+            dir.deleteRecursively()
         }
     }
 }
