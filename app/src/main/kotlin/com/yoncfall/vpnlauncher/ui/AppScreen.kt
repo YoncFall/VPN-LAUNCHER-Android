@@ -101,6 +101,15 @@ fun AppScreen() {
                 .navigationBarsPadding(),
         ) {
             TitleBar()
+            ui.update?.let { info ->
+                // 2.1.0: плашка обновления - компактная полоса над карточкой
+                UpdateBanner(
+                    info.version,
+                    ui.updateProgress,
+                    vm::onUpdateClick,
+                    vm::dismissUpdate,
+                )
+            }
             GameCard(
                 Modifier
                     .padding(horizontal = 14.dp)

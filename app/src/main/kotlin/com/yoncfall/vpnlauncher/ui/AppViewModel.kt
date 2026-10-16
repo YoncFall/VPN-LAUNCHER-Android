@@ -32,15 +32,21 @@ import android.content.Intent
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.yoncfall.vpnlauncher.BuildConfig
 import com.yoncfall.vpnlauncher.DmSubscription
+import com.yoncfall.vpnlauncher.DmUpdate
 import com.yoncfall.vpnlauncher.core.AppLog
 import com.yoncfall.vpnlauncher.core.ConfigError
+import com.yoncfall.vpnlauncher.core.UpdateInfo
 import com.yoncfall.vpnlauncher.core.VpnState
 import com.yoncfall.vpnlauncher.core.fetchNodes
 import com.yoncfall.vpnlauncher.core.loadState
 import com.yoncfall.vpnlauncher.core.measureNodeLatency
 import com.yoncfall.vpnlauncher.core.newSingBoxConfig
+import com.yoncfall.vpnlauncher.core.parseLatest
 import com.yoncfall.vpnlauncher.core.saveState
+import com.yoncfall.vpnlauncher.core.SLUG
+import com.yoncfall.vpnlauncher.core.APPS_JSON_URL
 import com.yoncfall.vpnlauncher.vpn.VpnRuntime
 import com.yoncfall.vpnlauncher.vpn.VpnServiceImpl
 import io.nekohasekai.libbox.Libbox
@@ -99,6 +105,8 @@ data class UiState(
     val egressAccent: Boolean = false,
     val dialog: GameDialog? = null,
     val logVisible: Boolean = false,
+    val update: UpdateInfo? = null, // новая версия найдена - показать плашку
+    val updateProgress: Int = -1, // -1 - не качается, иначе процент
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -150,6 +158,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (persisted.subUrl.isNotBlank()) {
             loadImpl(quiet = true)
         }
+        // 2.1.0: проверка новой версии на сайте (apps.json) - тихо: офлайн или
+        // версия не новее - плашка просто не показывается
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(3_000) // не мешаем старту (загрузка подписки/пинг)
+            val text = fetchAppsJson() ?: return@launch
+            val info = parseLatest(text, SLUG, BuildConfig.VERSION_NAME) ?: return@launch
+            _state.update { it.copy(update = info) }
+            AppLog.write("update available: ${info.version} (have ${BuildConfig.VERSION_NAME})")
+        }
     }
 
     // ------------------------------------------------------------- действия
@@ -171,6 +188,74 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun consentShown() {
         _consent.value = null
+    }
+
+    // ------------------------------------------------------------ обновление
+
+    fun dismissUpdate() = _state.update { it.copy(update = null, updateProgress = -1) }
+
+    /** apps.json с сайта; null при любой ошибке сети (тихо, без плашки). */
+    private fun fetchAppsJson(): String? = try {
+        val resp = http.newCall(Request.Builder().url(APPS_JSON_URL).build()).execute()
+        resp.use { if (it.isSuccessful) it.body?.string() else null }
+    } catch (_: Throwable) {
+        null
+    }
+
+    /**
+     * Кнопка «Обновить» (2.1.0): скачивание APK через DownloadManager (обход
+     * держателя HiOS, как у подписки), затем системный установщик (FileProvider
+     * + ACTION_VIEW). Разрешение «неизвестные источники» (API 26+) - отдельный
+     * экран настроек: пользователь возвращается и жмёт «Обновить» снова.
+     */
+    fun onUpdateClick() {
+        val st = _state.value
+        val info = st.update ?: return
+        if (st.updateProgress >= 0) return // уже качается
+        val app = getApplication<Application>()
+        if (android.os.Build.VERSION.SDK_INT >= 26 && !app.packageManager.canRequestPackageInstalls()) {
+            val intent = Intent(
+                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                android.net.Uri.parse("package:${app.packageName}"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            app.startActivity(intent)
+            AppLog.write("update: waiting for install-unknown permission")
+            return
+        }
+        // APK под ABI устройства (~35 МБ) вместо universal (~62 МБ); если
+        // APK под ABI не указан - universal (подходит всем)
+        val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull()
+        val url = if (abi == "arm64-v8a" && info.apkUrlAbi.isNotBlank()) info.apkUrlAbi else info.apkUrl
+        if (url.isBlank()) return
+        _state.update { it.copy(updateProgress = 0) }
+        AppLog.write("update: downloading ${info.version}")
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = DmUpdate.download(
+                app, url, info.version,
+                { pct -> _state.update { it.copy(updateProgress = pct) } },
+                AppLog::write,
+            )
+            if (file == null) {
+                _state.update { it.copy(updateProgress = -1) } // плашка остаётся - повтор
+                return@launch
+            }
+            try {
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    app,
+                    "${app.packageName}.fileprovider",
+                    file,
+                )
+                val install = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                app.startActivity(install)
+                AppLog.write("update: installer launched for ${info.version}")
+            } catch (e: Throwable) {
+                AppLog.write("update: installer error ${e.message}")
+                _state.update { it.copy(updateProgress = -1) }
+            }
+        }
     }
 
     // selectMode() удалён (правка после v2.0.0): секции РЕЖИМ нет, режим
