@@ -34,6 +34,8 @@ data class VpnState(
     val autoUrlTest: Boolean = true,
     // обход ТСПУ (17.10.2026): фрагментация TLS-хэндшейка к серверу
     val dpiBypass: Boolean = false,
+    // «ТСПУ без сервера» (2.3.0): локальный фрагментатор, без подписки
+    val dpiLocal: Boolean = false,
 )
 
 val DEFAULT_STATE = VpnState()
@@ -66,6 +68,8 @@ fun loadState(path: File): VpnState {
         // старые state.json без поля -> false (консервативно: без обхода)
         dpiBypass = (obj["dpiBypass"] as? JsonPrimitive)?.booleanOrNull
             ?: DEFAULT_STATE.dpiBypass,
+        dpiLocal = (obj["dpiLocal"] as? JsonPrimitive)?.booleanOrNull
+            ?: DEFAULT_STATE.dpiLocal,
     )
 }
 
@@ -79,6 +83,7 @@ fun saveState(state: VpnState, path: File) {
         put("lastNodes", JsonArray(state.lastNodes))
         put("autoUrlTest", state.autoUrlTest)
         put("dpiBypass", state.dpiBypass)
+        put("dpiLocal", state.dpiLocal)
     }
     val text = Json {
         prettyPrint = true

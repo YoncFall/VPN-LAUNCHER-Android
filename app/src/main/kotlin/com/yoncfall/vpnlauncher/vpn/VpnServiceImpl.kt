@@ -74,6 +74,17 @@ class VpnServiceImpl : VpnService() {
         /** Согласие системы: null = уже выдано, иначе Intent для startActivityForResult. */
         fun prepare(context: Context): Intent? = VpnService.prepare(context)
 
+        /**
+         * protect() сокета локального DpiProxy (2.3.0): снимает маршрут туннеля
+         * с сокета прокси - без этого туннель увёл бы его обратно в прокси
+         * (петля). false = сервис не поднят (страховка, соединение закроется).
+         */
+        fun protectSocket(socket: java.net.Socket): Boolean = try {
+            instance?.protect(socket) ?: false
+        } catch (_: Throwable) {
+            false
+        }
+
         /** Libbox.setup (idempotent) для проверки конфига из UI до старта сервиса. */
         fun ensureReady(context: Context) = ensureSetup(context.applicationContext)
 

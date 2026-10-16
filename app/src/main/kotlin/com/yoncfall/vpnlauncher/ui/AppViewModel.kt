@@ -37,14 +37,17 @@ import com.yoncfall.vpnlauncher.DmSubscription
 import com.yoncfall.vpnlauncher.DmUpdate
 import com.yoncfall.vpnlauncher.core.AppLog
 import com.yoncfall.vpnlauncher.core.ConfigError
+import com.yoncfall.vpnlauncher.core.DpiProxy
 import com.yoncfall.vpnlauncher.core.UpdateInfo
 import com.yoncfall.vpnlauncher.core.VpnState
+import com.yoncfall.vpnlauncher.core.buildLocalDpiConfig
 import com.yoncfall.vpnlauncher.core.fetchNodes
 import com.yoncfall.vpnlauncher.core.loadState
 import com.yoncfall.vpnlauncher.core.measureNodeLatency
 import com.yoncfall.vpnlauncher.core.newSingBoxConfig
 import com.yoncfall.vpnlauncher.core.parseLatest
 import com.yoncfall.vpnlauncher.core.saveState
+import com.yoncfall.vpnlauncher.core.writeConfig
 import com.yoncfall.vpnlauncher.core.SLUG
 import com.yoncfall.vpnlauncher.core.APPS_JSON_URL
 import com.yoncfall.vpnlauncher.vpn.VpnRuntime
@@ -68,6 +71,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -109,6 +113,7 @@ data class UiState(
     val updateProgress: Int = -1, // -1 - не качается, иначе процент
     val updateRunning: Boolean = false, // качается (защита от повторного тапа)
     val dpiBypass: Boolean = false, // обход ТСПУ: фрагментация TLS к серверу
+    val dpiLocal: Boolean = false, // «ТСПУ без сервера»: локальный фрагментатор
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -126,6 +131,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // порт) отбрасываем - они на Android бессмысленны
             exclusions = persisted.appList.filter { PACKAGE_RE.matcher(it).matches() },
             dpiBypass = persisted.dpiBypass,
+            dpiLocal = persisted.dpiLocal,
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -137,6 +143,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var wasConnected = false
     private var wasStarting = false
     private var egressJob: Job? = null
+
+    /** Локальный фрагментатор TLS (2.3.0, режим «ТСПУ без сервера»). */
+    private var dpiProxy: DpiProxy? = null
 
     private val http by lazy {
         OkHttpClient.Builder()
@@ -571,8 +580,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // наступит только после переподключения - говорим об этом статусом.
     fun toggleDpiBypass() {
         val on = !_state.value.dpiBypass
-        _state.update { it.copy(dpiBypass = on) }
-        save(persisted.copy(dpiBypass = on))
+        _state.update { it.copy(dpiBypass = on, dpiLocal = if (on) false else it.dpiLocal) }
+        save(persisted.copy(dpiBypass = on, dpiLocal = if (on) false else persisted.dpiLocal))
         if (_state.value.disconnectEnabled) {
             _state.update {
                 it.copy(
@@ -587,11 +596,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Переключатель «ТСПУ без сервера» (2.3.0): локальный фрагментатор вместо
+    // туннеля к серверу - подписка не нужна. Взаимоисключим с обходом «к
+    // серверу» (dpiBypass): два разных режима, путать их нельзя.
+    fun toggleDpiLocal() {
+        val on = !_state.value.dpiLocal
+        _state.update { it.copy(dpiLocal = on, dpiBypass = if (on) false else it.dpiBypass) }
+        save(persisted.copy(dpiLocal = on, dpiBypass = if (on) false else persisted.dpiBypass))
+        if (_state.value.disconnectEnabled) {
+            _state.update {
+                it.copy(
+                    status = if (on) {
+                        "«Без сервера» включено - отключись и подключись снова"
+                    } else {
+                        "«Без сервера» выключено - переподключись"
+                    },
+                    statusLevel = StatusLevel.WARN,
+                )
+            }
+        }
+    }
+
     // ----------------------------------------------------------- подключение
 
     fun connect() {
         val st = _state.value
         if (st.connectRunning || st.disconnectEnabled) return
+        if (st.dpiLocal) {
+            connectLocal()
+            return
+        }
         if (st.nodes.isEmpty()) {
             // E2E: после пересоздания активности автозагрузка ещё идёт (~40 с) -
             // тап по «Подключиться» получал ошибку; говорим статусом
@@ -671,6 +705,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             VpnServiceImpl.start(getApplication(), configFile.path, _state.value.exclusions)
             // дальше статусы придёт от сервиса (STARTING -> CONNECTED)
         } else {
+            stopDpiProxy()
             _state.update {
                 it.copy(
                     connectRunning = false,
@@ -682,9 +717,82 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Подключение в режиме «ТСПУ без сервера» (2.3.0): без узлов и подписки.
+     * Локальный SOCKS5-фрагментатор (DpiProxy) поднимается ДО старта туннеля -
+     * sing-box шлёт ему соединения по socks-аутбаунду с первой секунды.
+     * protect-сокетов берёт на себя VpnServiceImpl.protectSocket.
+     */
+    private fun connectLocal() {
+        val st = _state.value
+        save(
+            persisted.copy(
+                mode = "tun",
+                appList = st.exclusions,
+                dpiLocal = true,
+                dpiBypass = false,
+            ),
+        )
+        _state.update {
+            it.copy(
+                connectRunning = true,
+                status = "Генерация конфига...",
+                statusLevel = StatusLevel.TEXT,
+                led = LedState.BUSY,
+            )
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val app = getApplication<Application>()
+                VpnServiceImpl.ensureReady(app)
+                val path = buildLocalConfig()
+                val (ok, err) = checkConfig(path)
+                if (!ok) {
+                    AppLog.write("local config check failed: $err")
+                    throw ConfigError("Конфиг не прошёл проверку: $err")
+                }
+                startDpiProxy()
+                _state.update { it.copy(status = "Запуск sing-box...", statusLevel = StatusLevel.TEXT) }
+                val consent = VpnServiceImpl.prepare(app)
+                if (consent != null) {
+                    _consent.value = consent
+                } else {
+                    VpnServiceImpl.start(app, path.path, st.exclusions)
+                }
+            } catch (e: Throwable) {
+                stopDpiProxy()
+                AppLog.write("connect(local) ERROR: ${e.message}")
+                _state.update {
+                    it.copy(
+                        connectRunning = false,
+                        led = LedState.OFF,
+                        status = "Не удалось подключиться",
+                        statusLevel = StatusLevel.DANGER,
+                        dialog = GameDialog("Ошибка подключения", e.message ?: ""),
+                    )
+                }
+            }
+        }
+    }
+
+    /** Локальный фрагментатор; protect - снятие маршрута туннеля (анти-петля). */
+    private fun startDpiProxy() {
+        stopDpiProxy()
+        dpiProxy = DpiProxy(
+            protect = { s -> VpnServiceImpl.protectSocket(s) },
+            logger = AppLog::write,
+        ).also { it.start() }
+    }
+
+    private fun stopDpiProxy() {
+        dpiProxy?.stop()
+        dpiProxy = null
+    }
+
     fun disconnect() {
         wasConnected = false
         wasStarting = false
+        stopDpiProxy()
         VpnServiceImpl.stop(getApplication())
         stopEgress()
         _state.update {
@@ -743,8 +851,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             VpnRuntime.State.CONNECTED -> {
                 wasConnected = true
                 wasStarting = false
+                val local = _state.value.dpiLocal
                 val n = selectedTags(_state.value).size
-                val desc = if (n > 0) "$n сервер(а)" else "авто-тест всех"
+                val desc = when {
+                    local -> "ТСПУ без сервера"
+                    n > 0 -> "$n сервер(а)"
+                    else -> "авто-тест всех"
+                }
                 _state.update {
                     it.copy(
                         // без 'pid N': движок in-process (отклонение)
@@ -762,6 +875,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 wasConnected = false
                 wasStarting = false
                 stopEgress()
+                // туннель мёртв (kill switch снимается только вручную, но
+                // прокси без sing-box никому не нужен)
+                stopDpiProxy()
                 val dialogText = VpnRuntime.dialogText
                 _state.update {
                     it.copy(
@@ -785,6 +901,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     wasConnected = false
                     wasStarting = false
                     stopEgress()
+                    stopDpiProxy()
                     _state.update {
                         it.copy(
                             status = "Отключено",
@@ -861,6 +978,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             installRoot = getApplication<Application>().filesDir.path,
             path = configFile,
         )
+
+    /** Конфиг режима «ТСПУ без сервера»: tun + socks на локальный фрагментатор. */
+    private fun buildLocalConfig(): File {
+        val cfg = buildLocalDpiConfig(getApplication<Application>().filesDir.path)
+        writeConfig(cfg, configFile)
+        AppLog.write("local dpi config written: frag=${cfg["outbounds"]!!.jsonArray.size} outbounds")
+        return configFile
+    }
 
     /** Test-SingBoxConfig заменён на Libbox.checkConfig(json). */
     private fun checkConfig(path: File): Pair<Boolean, String> = try {

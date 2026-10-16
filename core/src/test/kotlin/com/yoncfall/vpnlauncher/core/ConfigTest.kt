@@ -343,4 +343,48 @@ class ConfigTest {
             dir.deleteRecursively()
         }
     }
+
+    // ---------------- «ТСПУ без сервера» (2.3.0) ----------------
+
+    @Test
+    fun `local dpi config shape`() {
+        val c = buildLocalDpiConfig(installRoot = "r")
+        assertEquals(setOf("log", "dns", "inbounds", "outbounds", "route", "experimental"), c.keys)
+        // без узлов: только socks на локальный фрагментатор + direct
+        val out = c["outbounds"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(2, out.size)
+        assertEquals("socks", out[0]["type"]!!.jsonPrimitive.content)
+        assertEquals("127.0.0.1", out[0]["server"]!!.jsonPrimitive.content)
+        assertEquals(DPI_PROXY_PORT, out[0]["server_port"]!!.jsonPrimitive.content.toInt())
+        assertEquals("direct", out[1]["type"]!!.jsonPrimitive.content)
+        // tun inbound как в серверном режиме
+        assertEquals("tun", c["inbounds"]!!.jsonArray[0].jsonObject["type"]!!.jsonPrimitive.content)
+        // финал - direct (всё мимо блокируемых доменов идёт напрямую)
+        assertEquals("direct", c["route"]!!.jsonObject["final"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `local dpi config routes blocked domains to frag and rejects quic`() {
+        val c = buildLocalDpiConfig(installRoot = "r")
+        val rules = c["route"]!!.jsonObject["rules"]!!.jsonArray.map { it.jsonObject }
+        // правило 1 - sniff, 2 - hijack-dns
+        assertEquals("sniff", rules[0]["action"]!!.jsonPrimitive.content)
+        assertEquals("hijack-dns", rules[1]["action"]!!.jsonPrimitive.content)
+        // QUIC гасится первым (reject), затем фрагментатор (route -> frag)
+        val reject = rules[2]
+        assertEquals("reject", reject["action"]!!.jsonPrimitive.content)
+        assertEquals("udp", reject["network"]!!.jsonPrimitive.content)
+        val rejectDomains = reject["domain"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue("youtube.com" in rejectDomains)
+        assertTrue("youtubei.googleapis.com" in rejectDomains) // точный домен тоже
+        val route = rules[3]
+        assertEquals("route", route["action"]!!.jsonPrimitive.content)
+        assertEquals("tcp", route["network"]!!.jsonPrimitive.content)
+        assertEquals("frag", route["outbound"]!!.jsonPrimitive.content)
+        val suffixes = route["domain_suffix"]!!.jsonArray.map { it.jsonPrimitive.content }
+        assertTrue(".discord.com" in suffixes)
+        assertFalse(".youtubei.googleapis.com" in suffixes) // суффикс только у apex-списка
+        // локальные сети -> direct
+        assertEquals("direct", rules[4]["outbound"]!!.jsonPrimitive.content)
+    }
 }

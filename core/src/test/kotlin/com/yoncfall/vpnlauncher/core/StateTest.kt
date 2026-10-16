@@ -57,4 +57,15 @@ class StateTest {
         p.writeText("""{"subUrl": "", "mode": "tun", "selected": "", "appList": [], "lastNodes": []}""", Charsets.UTF_8)
         assertEquals(false, loadState(p).dpiBypass)
     }
+
+    @Test
+    fun `dpi local roundtrip and legacy default`() {
+        val p = File(tmpDir(), "state.json")
+        // true переживает roundtrip (2.3.0)
+        saveState(DEFAULT_STATE.copy(dpiLocal = true), p)
+        assertEquals(true, loadState(p).dpiLocal)
+        // старый state.json без поля -> false (консервативно)
+        p.writeText("""{"subUrl": "", "mode": "tun", "selected": "", "appList": [], "lastNodes": []}""", Charsets.UTF_8)
+        assertEquals(false, loadState(p).dpiLocal)
+    }
 }
