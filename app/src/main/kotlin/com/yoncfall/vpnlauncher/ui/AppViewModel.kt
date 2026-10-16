@@ -107,6 +107,7 @@ data class UiState(
     val logVisible: Boolean = false,
     val update: UpdateInfo? = null, // новая версия найдена - показать плашку
     val updateProgress: Int = -1, // -1 - не качается, иначе процент
+    val updateRunning: Boolean = false, // качается (защита от повторного тапа)
     val dpiBypass: Boolean = false, // обход ТСПУ: фрагментация TLS к серверу
 )
 
@@ -213,7 +214,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun onUpdateClick() {
         val st = _state.value
         val info = st.update ?: return
-        if (st.updateProgress >= 0) return // уже качается
+        if (st.updateRunning) return // уже качается (флаг, не прогресс: pct
+        // может быть 0 ещё до старта сети)
         val app = getApplication<Application>()
         if (android.os.Build.VERSION.SDK_INT >= 26 && !app.packageManager.canRequestPackageInstalls()) {
             val intent = Intent(
@@ -229,7 +231,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull()
         val url = if (abi == "arm64-v8a" && info.apkUrlAbi.isNotBlank()) info.apkUrlAbi else info.apkUrl
         if (url.isBlank()) return
-        _state.update { it.copy(updateProgress = 0) }
+        _state.update { it.copy(updateProgress = 0, updateRunning = true) }
         AppLog.write("update: downloading ${info.version}")
         viewModelScope.launch(Dispatchers.IO) {
             val file = DmUpdate.download(
@@ -238,7 +240,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 AppLog::write,
             )
             if (file == null) {
-                _state.update { it.copy(updateProgress = -1) } // плашка остаётся - повтор
+                _state.update { it.copy(updateProgress = -1, updateRunning = false) } // плашка остаётся - повтор
                 return@launch
             }
             try {
@@ -253,9 +255,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 app.startActivity(install)
                 AppLog.write("update: installer launched for ${info.version}")
+                _state.update { it.copy(updateProgress = -1, updateRunning = false) }
             } catch (e: Throwable) {
                 AppLog.write("update: installer error ${e.message}")
-                _state.update { it.copy(updateProgress = -1) }
+                _state.update { it.copy(updateProgress = -1, updateRunning = false) }
             }
         }
     }

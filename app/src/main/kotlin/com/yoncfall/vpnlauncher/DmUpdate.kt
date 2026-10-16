@@ -80,10 +80,17 @@ object DmUpdate {
                             val total = c.getLong(
                                 c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
                             )
-                            val pct = if (total > 0) (got * 100 / total).toInt() else -1
-                            if (pct != lastPct) {
-                                lastPct = pct
-                                onProgress(pct)
+                            // размер ещё неизвестен (STATUS_PENDING/редирект):
+                            // молчим. Раньше шёл onProgress(-1), плашка
+                            // сбрасывалась, кнопка снова активна - двойной
+                            // тап запускал второй DM, который удалял
+                            // скачиваемый файл (баг v2.1.0, правка 2.2.1)
+                            if (total > 0) {
+                                val pct = (got * 100 / total).toInt()
+                                if (pct != lastPct) {
+                                    lastPct = pct
+                                    onProgress(pct)
+                                }
                             }
                         }
                     }
