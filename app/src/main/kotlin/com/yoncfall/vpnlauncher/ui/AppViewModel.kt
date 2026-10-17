@@ -37,20 +37,14 @@ import com.yoncfall.vpnlauncher.DmSubscription
 import com.yoncfall.vpnlauncher.DmUpdate
 import com.yoncfall.vpnlauncher.core.AppLog
 import com.yoncfall.vpnlauncher.core.ConfigError
-import com.yoncfall.vpnlauncher.core.DpiProxy
-import com.yoncfall.vpnlauncher.core.FragStrategy
 import com.yoncfall.vpnlauncher.core.UpdateInfo
 import com.yoncfall.vpnlauncher.core.VpnState
-import com.yoncfall.vpnlauncher.core.buildLocalDpiConfig
 import com.yoncfall.vpnlauncher.core.fetchNodes
 import com.yoncfall.vpnlauncher.core.loadState
 import com.yoncfall.vpnlauncher.core.measureNodeLatency
 import com.yoncfall.vpnlauncher.core.newSingBoxConfig
 import com.yoncfall.vpnlauncher.core.parseLatest
-import com.yoncfall.vpnlauncher.core.probeTlsDetailed
-import com.yoncfall.vpnlauncher.core.ProbeResult
 import com.yoncfall.vpnlauncher.core.saveState
-import com.yoncfall.vpnlauncher.core.writeConfig
 import com.yoncfall.vpnlauncher.core.SLUG
 import com.yoncfall.vpnlauncher.core.APPS_JSON_URL
 import com.yoncfall.vpnlauncher.vpn.VpnRuntime
@@ -115,10 +109,6 @@ data class UiState(
     val update: UpdateInfo? = null, // новая версия найдена - показать плашку
     val updateProgress: Int = -1, // -1 - не качается, иначе процент
     val updateRunning: Boolean = false, // качается (защита от повторного тапа)
-    val dpiBypass: Boolean = false, // обход ТСПУ: фрагментация TLS к серверу
-    val dpiLocal: Boolean = false, // «ТСПУ без сервера»: локальный фрагментатор
-    val fragStrategy: String = "", // id рабочей схемы (автоподбор, 2.4.0)
-    val fragDesc: String = "", // описание рабочей схемы (автоподбор, 2.4.0)
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -135,11 +125,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // исключения = пакеты приложений; старые .exe-записи (настольный
             // порт) отбрасываем - они на Android бессмысленны
             exclusions = persisted.appList.filter { PACKAGE_RE.matcher(it).matches() },
-            dpiBypass = persisted.dpiBypass,
-            dpiLocal = persisted.dpiLocal,
-            fragStrategy = persisted.fragStrategy,
-            fragDesc = FragStrategy.byId(persisted.fragStrategy).desc
-                .takeIf { persisted.fragStrategy.isNotEmpty() } ?: "",
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -151,12 +136,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var wasConnected = false
     private var wasStarting = false
     private var egressJob: Job? = null
-
-    /** Локальный фрагментатор TLS (2.3.0, режим «ТСПУ без сервера»). */
-    private var dpiProxy: DpiProxy? = null
-
-    /** Задача автоподбора схемы дробления (2.4.0); отменяется при отключении. */
-    private var pickJob: Job? = null
 
     private val http by lazy {
         OkHttpClient.Builder()
@@ -586,57 +565,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         save(persisted.copy(appList = emptyList()))
     }
 
-    // Переключатель обхода ТСПУ (кнопка «ТСПУ», запрос 17.10.2026).
-    // Конфиг строится при подключении, поэтому при работающем VPN эффект
-    // наступит только после переподключения - говорим об этом статусом.
-    fun toggleDpiBypass() {
-        val on = !_state.value.dpiBypass
-        _state.update { it.copy(dpiBypass = on, dpiLocal = if (on) false else it.dpiLocal) }
-        save(persisted.copy(dpiBypass = on, dpiLocal = if (on) false else persisted.dpiLocal))
-        if (_state.value.disconnectEnabled) {
-            _state.update {
-                it.copy(
-                    status = if (on) {
-                        "Обход ТСПУ включён - переподключись, чтобы применилось"
-                    } else {
-                        "Обход ТСПУ выключен - переподключись, чтобы применилось"
-                    },
-                    statusLevel = StatusLevel.WARN,
-                )
-            }
-        }
-    }
-
-    // Переключатель «ТСПУ без сервера» (2.3.0): локальный фрагментатор вместо
-    // туннеля к серверу - подписка не нужна. Взаимоисключим с обходом «к
-    // серверу» (dpiBypass): два разных режима, путать их нельзя.
-    fun toggleDpiLocal() {
-        val on = !_state.value.dpiLocal
-        _state.update { it.copy(dpiLocal = on, dpiBypass = if (on) false else it.dpiBypass) }
-        save(persisted.copy(dpiLocal = on, dpiBypass = if (on) false else persisted.dpiBypass))
-        if (_state.value.disconnectEnabled) {
-            _state.update {
-                it.copy(
-                    status = if (on) {
-                        "«Без сервера» включено - отключись и подключись снова"
-                    } else {
-                        "«Без сервера» выключено - переподключись"
-                    },
-                    statusLevel = StatusLevel.WARN,
-                )
-            }
-        }
-    }
-
     // ----------------------------------------------------------- подключение
 
     fun connect() {
         val st = _state.value
         if (st.connectRunning || st.disconnectEnabled) return
-        if (st.dpiLocal) {
-            connectLocal()
-            return
-        }
         if (st.nodes.isEmpty()) {
             // E2E: после пересоздания активности автозагрузка ещё идёт (~40 с) -
             // тап по «Подключиться» получал ошибку; говорим статусом
@@ -657,7 +590,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 appList = st.exclusions,
                 subUrl = st.subUrl.trim(),
                 selected = tags.joinToString(","),
-                dpiBypass = st.dpiBypass,
             ),
         )
         // цвет статуса не переназначаем (PS: ForeColor не менялся)
@@ -716,7 +648,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             VpnServiceImpl.start(getApplication(), configFile.path, _state.value.exclusions)
             // дальше статусы придёт от сервиса (STARTING -> CONNECTED)
         } else {
-            stopDpiProxy()
             _state.update {
                 it.copy(
                     connectRunning = false,
@@ -728,183 +659,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /**
-     * Подключение в режиме «ТСПУ без сервера» (2.3.0): без узлов и подписки.
-     * Локальный SOCKS5-фрагментатор (DpiProxy) поднимается ДО старта туннеля -
-     * sing-box шлёт ему соединения по socks-аутбаунду с первой секунды.
-     * protect-сокетов берёт на себя VpnServiceImpl.protectSocket.
-     */
-    private fun connectLocal() {
-        val st = _state.value
-        save(
-            persisted.copy(
-                mode = "tun",
-                appList = st.exclusions,
-                dpiLocal = true,
-                dpiBypass = false,
-            ),
-        )
-        _state.update {
-            it.copy(
-                connectRunning = true,
-                status = "Генерация конфига...",
-                statusLevel = StatusLevel.TEXT,
-                led = LedState.BUSY,
-            )
-        }
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val app = getApplication<Application>()
-                VpnServiceImpl.ensureReady(app)
-                val path = buildLocalConfig()
-                val (ok, err) = checkConfig(path)
-                if (!ok) {
-                    AppLog.write("local config check failed: $err")
-                    throw ConfigError("Конфиг не прошёл проверку: $err")
-                }
-                startDpiProxy()
-                _state.update { it.copy(status = "Запуск sing-box...", statusLevel = StatusLevel.TEXT) }
-                val consent = VpnServiceImpl.prepare(app)
-                if (consent != null) {
-                    _consent.value = consent
-                } else {
-                    VpnServiceImpl.start(app, path.path, st.exclusions)
-                }
-            } catch (e: Throwable) {
-                stopDpiProxy()
-                AppLog.write("connect(local) ERROR: ${e.message}")
-                _state.update {
-                    it.copy(
-                        connectRunning = false,
-                        led = LedState.OFF,
-                        status = "Не удалось подключиться",
-                        statusLevel = StatusLevel.DANGER,
-                        dialog = GameDialog("Ошибка подключения", e.message ?: ""),
-                    )
-                }
-            }
-        }
-    }
-
-    /** Локальный фрагментатор; protect - снятие маршрута туннеля (анти-петля). */
-    private fun startDpiProxy() {
-        stopDpiProxy()
-        dpiProxy = DpiProxy(
-            protect = { s -> VpnServiceImpl.protectSocket(s) },
-            logger = AppLog::write,
-        ).also {
-            // сохранённая рабочая схема (2.4.0) - до автоподбора, чтобы сразу
-            // работало то, что уже проверено; "" = FAST как в 2.3.0
-            it.strategy = FragStrategy.byId(_state.value.fragStrategy)
-            it.start()
-        }
-    }
-
-    private fun stopDpiProxy() {
-        pickJob?.cancel()
-        pickJob = null
-        dpiProxy?.stop()
-        dpiProxy = null
-    }
-
-    /**
-     * Автоподбор схемы дробления (2.4.0): как подбор алгоритмов winws на ПК.
-     *
-     * После подключения в режиме «ТСПУ без сервера» последовательно пробует
-     * схемы [FragStrategy] (сохранённая - первой, чтобы не перебирать зря),
-     * каждая проверяется TLS-пробой Discord и YouTube через весь туннель
-     * (сокет приложения не protect() - он обязан идти через tun). Первая
-     * схема, прошедшая обе пробы, запоминается в state.json и остаётся
-     * активной; если ни одна не прошла - включается тяжёлая и ставится
-     * предупреждение.
-     */
-    private fun startFragPick() {
-        val proxy = dpiProxy ?: return
-        pickJob?.cancel()
-        pickJob = viewModelScope.launch(Dispatchers.IO) {
-            // 0. sanity: цепочка работает вообще? незаблокированный хост - если
-            // он не проходит, вина не в ТСПУ и перебор схем бессмыслен
-            val chain = probeTlsDetailed("www.cloudflare.com")
-            if (chain != ProbeResult.OK) {
-                AppLog.write("автоподбор: sanity cloudflare=$chain - цепочка не работает")
-                _state.update {
-                    it.copy(
-                        status = "Обход без сервера: нет связи даже с незаблокированным сайтом (${ru(chain)})",
-                        statusLevel = StatusLevel.WARN,
-                        led = LedState.OK,
-                    )
-                }
-                return@launch
-            }
-            val saved = FragStrategy.byId(_state.value.fragStrategy)
-            val order = listOf(saved) + FragStrategy.values().filter { it != saved }
-            val report = ArrayList<String>()
-            var allDns = true
-            var allTcp = true
-            var allTls = true
-            for ((i, s) in order.withIndex()) {
-                if (!isActive) return@launch
-                proxy.strategy = s
-                _state.update {
-                    it.copy(status = "Подбор схемы обхода: ${i + 1}/${order.size} (${s.desc})")
-                }
-                val d = probeTlsDetailed("discord.com")
-                val y = probeTlsDetailed("www.youtube.com")
-                AppLog.write("автоподбор: ${s.id} discord=$d youtube=$y")
-                report.add("${s.desc}: discord - ${ru(d)}, youtube - ${ru(y)}")
-                if (d != ProbeResult.DNS || y != ProbeResult.DNS) allDns = false
-                if (d != ProbeResult.TCP || y != ProbeResult.TCP) allTcp = false
-                if (d != ProbeResult.TLS || y != ProbeResult.TLS) allTls = false
-                if (d == ProbeResult.OK && y == ProbeResult.OK) {
-                    save(persisted.copy(fragStrategy = s.id))
-                    _state.update {
-                        it.copy(
-                            fragStrategy = s.id,
-                            fragDesc = s.desc,
-                            status = "ПОДКЛЮЧЕНО  |  ТСПУ без сервера (${s.desc})",
-                            statusLevel = StatusLevel.OK,
-                            led = LedState.OK,
-                        )
-                    }
-                    return@launch
-                }
-            }
-            // ни одна схема не прошла обе пробы - ТСПУ сильнее фрагментации.
-            // Диагноз по виду отказов + полная таблица в диалог: пользователь
-            // шлёт скриншот, дальше видно, что чинить (DNS/цепочка/ТСПУ)
-            proxy.strategy = FragStrategy.DEEP
-            val diag = when {
-                allDns -> "DNS не отвечает - обход даже не проверить. Проверь интернет."
-                allTcp -> "Соединения не устанавливаются - вероятно отравленный DNS провайдера."
-                allTls -> "ТСПУ разобрал фрагменты - ни одна схема не спрятала SNI."
-                else -> "Смешанные отказы - подробности в списке ниже."
-            }
-            val msg = diag + "\n\n" + report.joinToString("\n")
-            AppLog.write("автоподбор: ни одна схема; " + msg.replace('\n', ';'))
-            _state.update {
-                it.copy(
-                    fragDesc = FragStrategy.DEEP.desc,
-                    status = "ТСПУ без сервера: ни одна схема не прошла проверку",
-                    statusLevel = StatusLevel.WARN,
-                    led = LedState.OK,
-                    dialog = GameDialog("Обход не найден", msg),
-                )
-            }
-        }
-    }
-
-    /** Перевод результата пробы для статусов и диалога подбора. */
-    private fun ru(r: ProbeResult) = when (r) {
-        ProbeResult.OK -> "прошло"
-        ProbeResult.DNS -> "DNS не отвечает"
-        ProbeResult.TCP -> "нет соединения"
-        ProbeResult.TLS -> "обрыв TLS"
-    }
-
     fun disconnect() {
         wasConnected = false
         wasStarting = false
-        stopDpiProxy()
         VpnServiceImpl.stop(getApplication())
         stopEgress()
         _state.update {
@@ -963,10 +720,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             VpnRuntime.State.CONNECTED -> {
                 wasConnected = true
                 wasStarting = false
-                val local = _state.value.dpiLocal
                 val n = selectedTags(_state.value).size
                 val desc = when {
-                    local -> "ТСПУ без сервера"
                     n > 0 -> "$n сервер(а)"
                     else -> "авто-тест всех"
                 }
@@ -981,17 +736,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 startEgress()
-                // локальный обход: подбираем рабочую схему дробления (2.4.0)
-                if (local) startFragPick()
             }
 
             VpnRuntime.State.FAILED -> {
                 wasConnected = false
                 wasStarting = false
                 stopEgress()
-                // туннель мёртв (kill switch снимается только вручную, но
-                // прокси без sing-box никому не нужен)
-                stopDpiProxy()
+                // туннель мёртв (kill switch снимается только вручную)
                 val dialogText = VpnRuntime.dialogText
                 _state.update {
                     it.copy(
@@ -1015,7 +766,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     wasConnected = false
                     wasStarting = false
                     stopEgress()
-                    stopDpiProxy()
                     _state.update {
                         it.copy(
                             status = "Отключено",
@@ -1088,18 +838,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             mode = "tun",
             appList = st.exclusions,
             onlySelected = onlySelected,
-            dpiBypass = st.dpiBypass,
             installRoot = getApplication<Application>().filesDir.path,
             path = configFile,
         )
-
-    /** Конфиг режима «ТСПУ без сервера»: tun + socks на локальный фрагментатор. */
-    private fun buildLocalConfig(): File {
-        val cfg = buildLocalDpiConfig(getApplication<Application>().filesDir.path)
-        writeConfig(cfg, configFile)
-        AppLog.write("local dpi config written: frag=${cfg["outbounds"]!!.jsonArray.size} outbounds")
-        return configFile
-    }
 
     /** Test-SingBoxConfig заменён на Libbox.checkConfig(json). */
     private fun checkConfig(path: File): Pair<Boolean, String> = try {

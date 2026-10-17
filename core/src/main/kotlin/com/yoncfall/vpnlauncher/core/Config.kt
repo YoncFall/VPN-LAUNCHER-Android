@@ -70,31 +70,6 @@ const val DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
 /** vpn_launcher.paths.SOCKS_PORT. */
 const val SOCKS_PORT = 20808
 
-// ------------------------------------------------- локальный обход ТСПУ (2.3.0)
-//
-// Режим «ТСПУ без сервера»: без подписки и VPN-сервера. sing-box поднимает
-// только tun; трафик к DPI-блокируемым доменам уходит на локальный SOCKS5-
-// фрагментатор (DpiProxy) в том же процессе, он дробит TLS ClientHello на
-// куски с паузами - ТСПУ не собирает SNI и пропускает соединение. Всё
-// остальное идёт напрямую. Это обход блокировки, а не приватность: наружу
-// трафик идёт с реального IP.
-//
-// Домены, которые ТСПУ режет по SNI (Discord/YouTube + их CDN). Список
-// расширяем при новых блокировках - как CLEAN_DOMAINS, в коде.
-val DPI_DOMAINS: List<String> = listOf(
-    "discord.com", "discord.gg", "discordapp.com", "discordapp.net",
-    "discord.media", "discordcdn.com",
-    "youtube.com", "youtu.be", "googlevideo.com", "ytimg.com",
-    "youtube-nocookie.com",
-)
-
-// Точные домены без поддоменов: API YouTube живёт на общем googleapis.com -
-// суффикс ломал бы весь Google API, фрагментируем только сам youtubei.
-val DPI_DOMAINS_EXACT: List<String> = listOf("youtubei.googleapis.com")
-
-/** Локальный SOCKS5-фрагментатор (127.0.0.1; между SOCKS_PORT и +1). */
-const val DPI_PROXY_PORT = 20909
-
 // Ключи ноды, переносимые в outbound как есть (core.ps1:486)
 private val NODE_KEYS = listOf(
     "uuid", "password", "method", "alter_id", "flow", "plugin", "plugin_opts",
@@ -134,7 +109,6 @@ fun buildSingBoxConfig(
     appList: List<String> = emptyList(),
     testUrl: String = DEFAULT_TEST_URL,
     onlySelected: Boolean = false,
-    dpiBypass: Boolean = false,
     installRoot: String,
 ): JsonObject {
     if (mode != "tun" && mode != "proxy") {
@@ -160,21 +134,6 @@ fun buildSingBoxConfig(
         for (k in NODE_KEYS) {
             val v = n[k]
             if (v != null && v !is JsonNull) o[k] = v
-        }
-        // обход ТСПУ (запрос 17.10.2026): фрагментация TLS-хэндшейка к серверу -
-        // ТСПУ режет по SNI в ClientHello, а разрезанный хэндшейк не читается.
-        // record_fragment - хэндшейк в несколько TLS-записей (легче и быстрее,
-        // основной механизм), fragment - разрез ClientHello на TCP-сегменты с
-        // паузой (запасной, документация sing-box рекомендует начинать с первого).
-        // Поля - только в tls-блоке самого узла: наружу, к заблокированным
-        // ресурсам, трафик идёт через туннель уже в обфусцированном виде.
-        if (dpiBypass && o["tls"] is JsonObject) {
-            val tls = LinkedHashMap<String, JsonElement>()
-            (o["tls"] as JsonObject).forEach { (kk, vv) -> tls[kk] = vv }
-            tls["record_fragment"] = JsonPrimitive(true)
-            tls["fragment"] = JsonPrimitive(true)
-            tls["fragment_fallback_delay"] = JsonPrimitive("300ms")
-            o["tls"] = JsonObject(tls)
         }
         out.add(JsonObject(o))
         tags.add(n["tag"]!!.jsonPrimitive.content)
@@ -310,107 +269,6 @@ fun buildSingBoxConfig(
     }
 }
 
-/**
- * Конфиг локального режима «ТСПУ без сервера» (2.3.0): без узлов и подписки.
- * tun без прокси-серверов: домены из [DPI_DOMAINS] уходят на локальный
- * SOCKS5-фрагментатор [DPI_PROXY_PORT], их же QUIC (UDP:443) гасится -
- * иначе приложение уйдёт в QUIC мимо фрагментации; всё остальное - direct.
- * DNS: провайдерский может отравлять блокируемые домены - локальный прокси
- * резолвит их через DoH сам, а dns-out нужен остальным доменам.
- */
-fun buildLocalDpiConfig(
-    installRoot: String,
-    fragPort: Int = DPI_PROXY_PORT,
-): JsonObject {
-    val rules = ArrayList<JsonElement>()
-    rules.add(buildJsonObject { put("action", "sniff") })
-    rules.add(buildJsonObject {
-        put("protocol", "dns")
-        put("action", "hijack-dns")
-    })
-    // гасим QUIC по блокируемым доменам: приложение увидит отказ UDP:443 и
-    // уйдёт на TCP/TLS, где работает фрагментация
-    rules.add(buildJsonObject {
-        put("action", "reject")
-        put("network", "udp")
-        put("port", JsonArray(listOf(JsonPrimitive(443))))
-        // 'domain' в sing-box = точные совпадения (apex + DPI_DOMAINS_EXACT),
-        // 'domain_suffix' - поддомены с ведущей точкой
-        put("domain", JsonArray((DPI_DOMAINS + DPI_DOMAINS_EXACT).map { JsonPrimitive(it) }))
-        put("domain_suffix", JsonArray(DPI_DOMAINS.map { JsonPrimitive(".$it") }))
-    })
-    // блокируемые домены -> локальный фрагментатор (только TCP)
-    rules.add(buildJsonObject {
-        put("action", "route")
-        put("network", "tcp")
-        put("domain", JsonArray((DPI_DOMAINS + DPI_DOMAINS_EXACT).map { JsonPrimitive(it) }))
-        put("domain_suffix", JsonArray(DPI_DOMAINS.map { JsonPrimitive(".$it") }))
-        put("outbound", "frag")
-    })
-    rules.add(buildJsonObject {
-        put("action", "route")
-        put("ip_cidr", JsonArray(LOCAL_CIDRS.map { JsonPrimitive(it) }))
-        put("outbound", "direct")
-    })
-
-    val root = File(installRoot)
-    return buildJsonObject {
-        put("log", buildJsonObject {
-            put("level", "info")
-            put("timestamp", true)
-        })
-        put("dns", buildJsonObject {
-            put("servers", JsonArray(listOf(
-                buildJsonObject {
-                    put("tag", "dns-local")
-                    put("type", "local")
-                },
-                buildJsonObject {
-                    put("tag", "dns-out")
-                    put("type", "udp")
-                    put("server", "1.1.1.1")
-                    put("server_port", 53)
-                },
-            )))
-            put("final", "dns-out")
-        })
-        put("inbounds", JsonArray(listOf(buildJsonObject {
-            put("type", "tun")
-            put("tag", "tun-in")
-            put("interface_name", "vpn-launcher-tun")
-            put("address", JsonArray(listOf(JsonPrimitive("172.19.0.1/30"), JsonPrimitive("fdfe:dcba:9876::1/126"))))
-            put("mtu", 1500)
-            put("auto_route", true)
-            put("strict_route", true)
-            put("stack", "mixed")
-        })))
-        put("outbounds", JsonArray(listOf(
-            buildJsonObject {
-                put("type", "socks")
-                put("tag", "frag")
-                put("server", "127.0.0.1")
-                put("server_port", fragPort)
-            },
-            buildJsonObject {
-                put("type", "direct")
-                put("tag", "direct")
-            },
-        )))
-        put("route", buildJsonObject {
-            put("rules", JsonArray(rules))
-            put("auto_detect_interface", true)
-            put("default_domain_resolver", buildJsonObject { put("server", "dns-local") })
-            put("final", "direct")
-        })
-        put("experimental", buildJsonObject {
-            put("cache_file", buildJsonObject {
-                put("enabled", true)
-                put("path", File(root, "cache.db").path)
-            })
-        })
-    }
-}
-
 /** [IO.File]::WriteAllText UTF-8 без BOM; JSON с 4 пробелами (как ConvertTo-Json), с \n на конце. */
 fun writeConfig(cfg: JsonObject, path: File): File {    val json = Json { prettyPrint = true }
     path.writeText(json.encodeToString(JsonElement.serializer(), cfg) + "\n")
@@ -428,12 +286,11 @@ fun newSingBoxConfig(
     appList: List<String> = emptyList(),
     testUrl: String = DEFAULT_TEST_URL,
     onlySelected: Boolean = false,
-    dpiBypass: Boolean = false,
     installRoot: String,
     path: File,
     logger: (String) -> Unit = AppLog::write,
 ): File {
-    val cfg = buildSingBoxConfig(nodes, selected, mode, appList, testUrl, onlySelected, dpiBypass, installRoot)
+    val cfg = buildSingBoxConfig(nodes, selected, mode, appList, testUrl, onlySelected, installRoot)
     val p = writeConfig(cfg, path)
     if (mode == "tun") {
         val directApps = uniq(GAME_SAFE_PROCESSES + appList)
@@ -443,8 +300,7 @@ fun newSingBoxConfig(
     }
     val outCount = cfg["outbounds"]!!.jsonArray.size
     val finalTag = cfg["route"]!!.jsonObject["final"]!!.jsonPrimitive.content
-    logger("config written: $outCount outbounds, mode=$mode, final=$finalTag" +
-        if (dpiBypass) ", dpi-bypass on" else "")
+    logger("config written: $outCount outbounds, mode=$mode, final=$finalTag")
     return p
 }
 
