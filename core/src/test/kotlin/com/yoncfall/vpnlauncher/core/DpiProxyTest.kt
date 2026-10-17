@@ -211,6 +211,20 @@ class DpiProxyTest {
     }
 
     @Test
+    fun `probe detailed tells the failing stage`() {
+        // стадия отказа - диагноз для подбора (2.4.1): DNS vs TCP vs TLS
+        assertEquals(
+            ProbeResult.DNS,
+            probeTlsDetailed("test.local", resolve = { throw IllegalStateException("нет сети") }),
+        )
+        // 240.0.0.1 - заброшенная зона, соединение не устанавливается никогда
+        assertEquals(
+            ProbeResult.TCP,
+            probeTlsDetailed("test.local", resolve = { "240.0.0.1" }, timeoutMs = 1_000),
+        )
+    }
+
+    @Test
     fun `non tls traffic passes through unfragmented`() {
         val target = Target()
         val proxy = DpiProxy(port = 0, resolve = { "127.0.0.1" }, protect = { true }, logger = {})

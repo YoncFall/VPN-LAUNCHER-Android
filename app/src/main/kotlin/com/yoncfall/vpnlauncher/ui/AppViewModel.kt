@@ -47,7 +47,8 @@ import com.yoncfall.vpnlauncher.core.loadState
 import com.yoncfall.vpnlauncher.core.measureNodeLatency
 import com.yoncfall.vpnlauncher.core.newSingBoxConfig
 import com.yoncfall.vpnlauncher.core.parseLatest
-import com.yoncfall.vpnlauncher.core.probeTls
+import com.yoncfall.vpnlauncher.core.probeTlsDetailed
+import com.yoncfall.vpnlauncher.core.ProbeResult
 import com.yoncfall.vpnlauncher.core.saveState
 import com.yoncfall.vpnlauncher.core.writeConfig
 import com.yoncfall.vpnlauncher.core.SLUG
@@ -821,18 +822,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val proxy = dpiProxy ?: return
         pickJob?.cancel()
         pickJob = viewModelScope.launch(Dispatchers.IO) {
+            // 0. sanity: цепочка работает вообще? незаблокированный хост - если
+            // он не проходит, вина не в ТСПУ и перебор схем бессмыслен
+            val chain = probeTlsDetailed("www.cloudflare.com")
+            if (chain != ProbeResult.OK) {
+                AppLog.write("автоподбор: sanity cloudflare=$chain - цепочка не работает")
+                _state.update {
+                    it.copy(
+                        status = "Обход без сервера: нет связи даже с незаблокированным сайтом (${ru(chain)})",
+                        statusLevel = StatusLevel.WARN,
+                        led = LedState.OK,
+                    )
+                }
+                return@launch
+            }
             val saved = FragStrategy.byId(_state.value.fragStrategy)
             val order = listOf(saved) + FragStrategy.values().filter { it != saved }
+            val report = ArrayList<String>()
+            var allDns = true
+            var allTcp = true
+            var allTls = true
             for ((i, s) in order.withIndex()) {
                 if (!isActive) return@launch
                 proxy.strategy = s
                 _state.update {
                     it.copy(status = "Подбор схемы обхода: ${i + 1}/${order.size} (${s.desc})")
                 }
-                val okD = probeTls("discord.com")
-                val okY = probeTls("www.youtube.com")
-                AppLog.write("автоподбор: ${s.id} discord=$okD youtube=$okY")
-                if (okD && okY) {
+                val d = probeTlsDetailed("discord.com")
+                val y = probeTlsDetailed("www.youtube.com")
+                AppLog.write("автоподбор: ${s.id} discord=$d youtube=$y")
+                report.add("${s.desc}: discord - ${ru(d)}, youtube - ${ru(y)}")
+                if (d != ProbeResult.DNS || y != ProbeResult.DNS) allDns = false
+                if (d != ProbeResult.TCP || y != ProbeResult.TCP) allTcp = false
+                if (d != ProbeResult.TLS || y != ProbeResult.TLS) allTls = false
+                if (d == ProbeResult.OK && y == ProbeResult.OK) {
                     save(persisted.copy(fragStrategy = s.id))
                     _state.update {
                         it.copy(
@@ -846,17 +869,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
             }
-            // ни одна схема не прошла обе пробы - ТСПУ сильнее фрагментации
+            // ни одна схема не прошла обе пробы - ТСПУ сильнее фрагментации.
+            // Диагноз по виду отказов + полная таблица в диалог: пользователь
+            // шлёт скриншот, дальше видно, что чинить (DNS/цепочка/ТСПУ)
             proxy.strategy = FragStrategy.DEEP
+            val diag = when {
+                allDns -> "DNS не отвечает - обход даже не проверить. Проверь интернет."
+                allTcp -> "Соединения не устанавливаются - вероятно отравленный DNS провайдера."
+                allTls -> "ТСПУ разобрал фрагменты - ни одна схема не спрятала SNI."
+                else -> "Смешанные отказы - подробности в списке ниже."
+            }
+            val msg = diag + "\n\n" + report.joinToString("\n")
+            AppLog.write("автоподбор: ни одна схема; " + msg.replace('\n', ';'))
             _state.update {
                 it.copy(
                     fragDesc = FragStrategy.DEEP.desc,
                     status = "ТСПУ без сервера: ни одна схема не прошла проверку",
                     statusLevel = StatusLevel.WARN,
                     led = LedState.OK,
+                    dialog = GameDialog("Обход не найден", msg),
                 )
             }
         }
+    }
+
+    /** Перевод результата пробы для статусов и диалога подбора. */
+    private fun ru(r: ProbeResult) = when (r) {
+        ProbeResult.OK -> "прошло"
+        ProbeResult.DNS -> "DNS не отвечает"
+        ProbeResult.TCP -> "нет соединения"
+        ProbeResult.TLS -> "обрыв TLS"
     }
 
     fun disconnect() {

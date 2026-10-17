@@ -50,6 +50,7 @@ fun parseDohIp(json: String): String? {
 private val DOH_URLS = listOf(
     "https://dns.google/resolve?name={host}&type=A",
     "https://cloudflare-dns.com/dns-query?name={host}&type=A",
+    "https://dns.quad9.net/dns-query?name={host}&type=A",
 )
 
 /** DoH-резолвер с фолбэками: google -> cloudflare -> системный DNS. */
@@ -86,7 +87,12 @@ enum class FragStrategy(
     FAST("fast", "быстрая", listOf(1, 3), listOf(40, 30)),
     RAMP("ramp", "нарастающая", listOf(1, 2, 4, 8), listOf(10, 20, 40, 60)),
     TINY("tiny", "мелкие куски", listOf(1, 1, 2, 2, 4, 4), List(6) { 20 }),
+    // 48 порций по 1 байту: переупорядочиватель ТСПУ часто ограничен числом
+    // фрагментов на поток и после лимита выбрасывает буфер - SNI не собирается
+    MANY("many", "48 мелких фрагментов", List(48) { 1 }, List(48) { 8 }),
     SLOW("slow", "длинные паузы", listOf(1, 3), listOf(300, 200)),
+    // пауза длиннее типичного окна переупорядочивания (~1с у части ТСПУ)
+    LONG("long", "пауза 1.5с", listOf(1), listOf(1_500)),
     DEEP("deep", "тяжёлая", listOf(1, 1, 1, 5), listOf(200, 200, 200, 100));
 
     companion object {
@@ -96,37 +102,73 @@ enum class FragStrategy(
 }
 
 /**
+ * Результат пробы (2.4.1): ГДЕ порвалась цепочка обхода - этого требует
+ * диагностика «не нашёл рабочую схему» (в лог и в диалог подбора).
+ */
+enum class ProbeResult {
+    OK, // TLS-хендшейк прошёл - ТСПУ пропустил
+    DNS, // резолв не ответил (ни DoH, ни системный)
+    TCP, // соединение не установлено (не тот IP / обрыв на синхронизации)
+    TLS, // хендшейк оборван - ТСПУ прочитал SNI и зарезал
+}
+
+/**
  * TLS-проба через всю цепочку обхода (2.4.0): сокет приложения идёт в tun ->
  * sing-box (sniff SNI) -> фрагментатор -> настоящий сервер. Резолв - DoH,
- * не отравлен провайдером. true = ТСПУ пропустил хендшейк с текущей схемой.
+ * не отравлен провайдером. Подробная версия: говорит, на какой стадии отказ.
  *
- * Сокет не protect() - он обязан идти через туннель, иначе проба нечего
+ * Сокет не protect() - он обязан идти через туннель, иначе проба ничего
  * не проверяет.
  */
+fun probeTlsDetailed(
+    host: String,
+    resolve: (String) -> String = ::dohResolve,
+    timeoutMs: Long = 5_000,
+): ProbeResult {
+    val ip = try {
+        resolve(host)
+    } catch (e: Throwable) {
+        AppLog.write("проба $host: DNS не разрешился: ${e.message}")
+        return ProbeResult.DNS
+    }
+    return try {
+        Socket().use { sock ->
+            try {
+                sock.connect(InetSocketAddress(ip, 443), timeoutMs.toInt())
+            } catch (e: Throwable) {
+                AppLog.write("проба $host: TCP не прошёл ($ip): ${e.javaClass.simpleName}: ${e.message}")
+                return ProbeResult.TCP
+            }
+            sock.soTimeout = timeoutMs.toInt()
+            val ssl = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
+                .createSocket(sock, host, 443, true) as javax.net.ssl.SSLSocket
+            try {
+                ssl.use {
+                    // SNI: Android Conscrypt знает setHostname; на прочих JVM - no-op,
+                    // хост уже передан в createSocket
+                    runCatching {
+                        it.javaClass.getMethod("setHostname", String::class.java).invoke(it, host)
+                    }
+                    it.startHandshake()
+                }
+            } catch (e: Throwable) {
+                AppLog.write("проба $host: хендшейк оборван ($ip): ${e.javaClass.simpleName}: ${e.message}")
+                return ProbeResult.TLS
+            }
+        }
+        ProbeResult.OK
+    } catch (e: Throwable) {
+        AppLog.write("проба $host: сбой ($ip): ${e.javaClass.simpleName}: ${e.message}")
+        ProbeResult.TLS
+    }
+}
+
+/** Короткая булева версия пробы: true = ТСПУ пропустил хендшейк. */
 fun probeTls(
     host: String,
     resolve: (String) -> String = ::dohResolve,
     timeoutMs: Long = 5_000,
-): Boolean = try {
-    val ip = resolve(host)
-    Socket().use { sock ->
-        sock.connect(InetSocketAddress(ip, 443), timeoutMs.toInt())
-        sock.soTimeout = timeoutMs.toInt()
-        val ssl = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
-            .createSocket(sock, host, 443, true) as javax.net.ssl.SSLSocket
-        ssl.use {
-            // SNI: Android Conscrypt знает setHostname; на прочих JVM - no-op,
-            // хост уже передан в createSocket
-            runCatching {
-                it.javaClass.getMethod("setHostname", String::class.java).invoke(it, host)
-            }
-            it.startHandshake()
-        }
-    }
-    true
-} catch (_: Throwable) {
-    false
-}
+): Boolean = probeTlsDetailed(host, resolve, timeoutMs) == ProbeResult.OK
 
 /**
  * SOCKS5-сервер на 127.0.0.1 с фрагментацией ClientHello.
