@@ -68,4 +68,15 @@ class StateTest {
         p.writeText("""{"subUrl": "", "mode": "tun", "selected": "", "appList": [], "lastNodes": []}""", Charsets.UTF_8)
         assertEquals(false, loadState(p).dpiLocal)
     }
+
+    @Test
+    fun `frag strategy roundtrip and legacy default`() {
+        val p = File(tmpDir(), "state.json")
+        // выбранная автоподбором схема переживает roundtrip (2.4.0)
+        saveState(DEFAULT_STATE.copy(fragStrategy = "deep"), p)
+        assertEquals("deep", loadState(p).fragStrategy)
+        // старый state.json без поля -> "" = подбор с нуля
+        p.writeText("""{"subUrl": "", "mode": "tun", "selected": "", "appList": [], "lastNodes": []}""", Charsets.UTF_8)
+        assertEquals("", loadState(p).fragStrategy)
+    }
 }

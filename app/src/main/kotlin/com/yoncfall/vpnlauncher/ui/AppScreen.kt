@@ -331,6 +331,20 @@ fun AppScreen() {
                         Modifier.fillMaxWidth(), height = 36.dp,
                         onClick = vm::toggleDpiLocal,
                     )
+                    // 2.4.0: показываем рабочую схему дробления - её подбирает
+                    // автопроверка после подключения (Discord + YouTube)
+                    if (ui.dpiLocal) {
+                        Spacer(Modifier.height(4.dp))
+                        BasicText(
+                            if (ui.fragDesc.isNotEmpty()) {
+                                "схема обхода: ${ui.fragDesc}"
+                            } else {
+                                "схема подберётся автоматически при подключении"
+                            },
+                            style = Fonts.Sub.copy(color = Theme.TextDim),
+                            maxLines = 1,
+                        )
+                    }
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GameButton(

@@ -38,6 +38,7 @@ import com.yoncfall.vpnlauncher.DmUpdate
 import com.yoncfall.vpnlauncher.core.AppLog
 import com.yoncfall.vpnlauncher.core.ConfigError
 import com.yoncfall.vpnlauncher.core.DpiProxy
+import com.yoncfall.vpnlauncher.core.FragStrategy
 import com.yoncfall.vpnlauncher.core.UpdateInfo
 import com.yoncfall.vpnlauncher.core.VpnState
 import com.yoncfall.vpnlauncher.core.buildLocalDpiConfig
@@ -46,6 +47,7 @@ import com.yoncfall.vpnlauncher.core.loadState
 import com.yoncfall.vpnlauncher.core.measureNodeLatency
 import com.yoncfall.vpnlauncher.core.newSingBoxConfig
 import com.yoncfall.vpnlauncher.core.parseLatest
+import com.yoncfall.vpnlauncher.core.probeTls
 import com.yoncfall.vpnlauncher.core.saveState
 import com.yoncfall.vpnlauncher.core.writeConfig
 import com.yoncfall.vpnlauncher.core.SLUG
@@ -114,6 +116,8 @@ data class UiState(
     val updateRunning: Boolean = false, // качается (защита от повторного тапа)
     val dpiBypass: Boolean = false, // обход ТСПУ: фрагментация TLS к серверу
     val dpiLocal: Boolean = false, // «ТСПУ без сервера»: локальный фрагментатор
+    val fragStrategy: String = "", // id рабочей схемы (автоподбор, 2.4.0)
+    val fragDesc: String = "", // описание рабочей схемы (автоподбор, 2.4.0)
 )
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
@@ -132,6 +136,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             exclusions = persisted.appList.filter { PACKAGE_RE.matcher(it).matches() },
             dpiBypass = persisted.dpiBypass,
             dpiLocal = persisted.dpiLocal,
+            fragStrategy = persisted.fragStrategy,
+            fragDesc = FragStrategy.byId(persisted.fragStrategy).desc
+                .takeIf { persisted.fragStrategy.isNotEmpty() } ?: "",
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -146,6 +153,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Локальный фрагментатор TLS (2.3.0, режим «ТСПУ без сервера»). */
     private var dpiProxy: DpiProxy? = null
+
+    /** Задача автоподбора схемы дробления (2.4.0); отменяется при отключении. */
+    private var pickJob: Job? = null
 
     private val http by lazy {
         OkHttpClient.Builder()
@@ -781,12 +791,72 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         dpiProxy = DpiProxy(
             protect = { s -> VpnServiceImpl.protectSocket(s) },
             logger = AppLog::write,
-        ).also { it.start() }
+        ).also {
+            // сохранённая рабочая схема (2.4.0) - до автоподбора, чтобы сразу
+            // работало то, что уже проверено; "" = FAST как в 2.3.0
+            it.strategy = FragStrategy.byId(_state.value.fragStrategy)
+            it.start()
+        }
     }
 
     private fun stopDpiProxy() {
+        pickJob?.cancel()
+        pickJob = null
         dpiProxy?.stop()
         dpiProxy = null
+    }
+
+    /**
+     * Автоподбор схемы дробления (2.4.0): как подбор алгоритмов winws на ПК.
+     *
+     * После подключения в режиме «ТСПУ без сервера» последовательно пробует
+     * схемы [FragStrategy] (сохранённая - первой, чтобы не перебирать зря),
+     * каждая проверяется TLS-пробой Discord и YouTube через весь туннель
+     * (сокет приложения не protect() - он обязан идти через tun). Первая
+     * схема, прошедшая обе пробы, запоминается в state.json и остаётся
+     * активной; если ни одна не прошла - включается тяжёлая и ставится
+     * предупреждение.
+     */
+    private fun startFragPick() {
+        val proxy = dpiProxy ?: return
+        pickJob?.cancel()
+        pickJob = viewModelScope.launch(Dispatchers.IO) {
+            val saved = FragStrategy.byId(_state.value.fragStrategy)
+            val order = listOf(saved) + FragStrategy.values().filter { it != saved }
+            for ((i, s) in order.withIndex()) {
+                if (!isActive) return@launch
+                proxy.strategy = s
+                _state.update {
+                    it.copy(status = "Подбор схемы обхода: ${i + 1}/${order.size} (${s.desc})")
+                }
+                val okD = probeTls("discord.com")
+                val okY = probeTls("www.youtube.com")
+                AppLog.write("автоподбор: ${s.id} discord=$okD youtube=$okY")
+                if (okD && okY) {
+                    save(persisted.copy(fragStrategy = s.id))
+                    _state.update {
+                        it.copy(
+                            fragStrategy = s.id,
+                            fragDesc = s.desc,
+                            status = "ПОДКЛЮЧЕНО  |  ТСПУ без сервера (${s.desc})",
+                            statusLevel = StatusLevel.OK,
+                            led = LedState.OK,
+                        )
+                    }
+                    return@launch
+                }
+            }
+            // ни одна схема не прошла обе пробы - ТСПУ сильнее фрагментации
+            proxy.strategy = FragStrategy.DEEP
+            _state.update {
+                it.copy(
+                    fragDesc = FragStrategy.DEEP.desc,
+                    status = "ТСПУ без сервера: ни одна схема не прошла проверку",
+                    statusLevel = StatusLevel.WARN,
+                    led = LedState.OK,
+                )
+            }
+        }
     }
 
     fun disconnect() {
@@ -869,6 +939,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
                 startEgress()
+                // локальный обход: подбираем рабочую схему дробления (2.4.0)
+                if (local) startFragPick()
             }
 
             VpnRuntime.State.FAILED -> {

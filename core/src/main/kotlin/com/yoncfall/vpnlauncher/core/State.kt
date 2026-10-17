@@ -36,6 +36,8 @@ data class VpnState(
     val dpiBypass: Boolean = false,
     // «ТСПУ без сервера» (2.3.0): локальный фрагментатор, без подписки
     val dpiLocal: Boolean = false,
+    // рабочая схема дробления (2.4.0, автоподбор); "" = ещё не подбиралась
+    val fragStrategy: String = "",
 )
 
 val DEFAULT_STATE = VpnState()
@@ -70,6 +72,9 @@ fun loadState(path: File): VpnState {
             ?: DEFAULT_STATE.dpiBypass,
         dpiLocal = (obj["dpiLocal"] as? JsonPrimitive)?.booleanOrNull
             ?: DEFAULT_STATE.dpiLocal,
+        // пустая строка = схема ещё не подбиралась (консервативно)
+        fragStrategy = (obj["fragStrategy"] as? JsonPrimitive)?.contentOrNull
+            ?: DEFAULT_STATE.fragStrategy,
     )
 }
 
@@ -84,6 +89,7 @@ fun saveState(state: VpnState, path: File) {
         put("autoUrlTest", state.autoUrlTest)
         put("dpiBypass", state.dpiBypass)
         put("dpiLocal", state.dpiLocal)
+        put("fragStrategy", state.fragStrategy)
     }
     val text = Json {
         prettyPrint = true

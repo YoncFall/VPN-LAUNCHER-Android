@@ -70,6 +70,65 @@ fun dohResolve(host: String): String {
 }
 
 /**
+ * Схема дробления ClientHello (2.4.0, автоподбор): [splits] - сколько байт
+ * писать подряд, [gaps] - пауза (мс) после каждого сегмента; заголовок
+ * TLS-записи пишется вместе с первым сегментом. Порядок в enum = порядок
+ * перебора (от быстрой к тяжёлой); рабочая запоминается в state.json
+ * (fragStrategy). Как подбор алгоритмов winws на ПК, но по схемам
+ * фрагментации - Android даёт только TUN, сырых пакетов нет.
+ */
+enum class FragStrategy(
+    val id: String,
+    val desc: String,
+    val splits: List<Int>,
+    val gaps: List<Long>,
+) {
+    FAST("fast", "быстрая", listOf(1, 3), listOf(40, 30)),
+    RAMP("ramp", "нарастающая", listOf(1, 2, 4, 8), listOf(10, 20, 40, 60)),
+    TINY("tiny", "мелкие куски", listOf(1, 1, 2, 2, 4, 4), List(6) { 20 }),
+    SLOW("slow", "длинные паузы", listOf(1, 3), listOf(300, 200)),
+    DEEP("deep", "тяжёлая", listOf(1, 1, 1, 5), listOf(200, 200, 200, 100));
+
+    companion object {
+        /** Неизвестный id (старый state.json) -> FAST (как в 2.3.0). */
+        fun byId(id: String?): FragStrategy = values().firstOrNull { it.id == id } ?: FAST
+    }
+}
+
+/**
+ * TLS-проба через всю цепочку обхода (2.4.0): сокет приложения идёт в tun ->
+ * sing-box (sniff SNI) -> фрагментатор -> настоящий сервер. Резолв - DoH,
+ * не отравлен провайдером. true = ТСПУ пропустил хендшейк с текущей схемой.
+ *
+ * Сокет не protect() - он обязан идти через туннель, иначе проба нечего
+ * не проверяет.
+ */
+fun probeTls(
+    host: String,
+    resolve: (String) -> String = ::dohResolve,
+    timeoutMs: Long = 5_000,
+): Boolean = try {
+    val ip = resolve(host)
+    Socket().use { sock ->
+        sock.connect(InetSocketAddress(ip, 443), timeoutMs.toInt())
+        sock.soTimeout = timeoutMs.toInt()
+        val ssl = (javax.net.ssl.SSLSocketFactory.getDefault() as javax.net.ssl.SSLSocketFactory)
+            .createSocket(sock, host, 443, true) as javax.net.ssl.SSLSocket
+        ssl.use {
+            // SNI: Android Conscrypt знает setHostname; на прочих JVM - no-op,
+            // хост уже передан в createSocket
+            runCatching {
+                it.javaClass.getMethod("setHostname", String::class.java).invoke(it, host)
+            }
+            it.startHandshake()
+        }
+    }
+    true
+} catch (_: Throwable) {
+    false
+}
+
+/**
  * SOCKS5-сервер на 127.0.0.1 с фрагментацией ClientHello.
  *
  * @param port 0 - эфемерный порт (для тестов), смотри [localPort].
@@ -82,14 +141,19 @@ class DpiProxy(
     private val resolve: (String) -> String = ::dohResolve,
     private val protect: (Socket) -> Boolean = { true },
     private val logger: (String) -> Unit = AppLog::write,
-    private val gap1Ms: Long = 40,
-    private val gap2Ms: Long = 30,
 ) {
 
     private val running = AtomicBoolean(false)
     private var server: ServerSocket? = null
     private var pool: java.util.concurrent.ExecutorService? = null
     private val resolveCache = ConcurrentHashMap<String, String>()
+
+    /**
+     * Текущая схема дробления; автоподбор (2.4.0) меняет на лету между
+     * пробами - @Volatile, читается на каждом соединении.
+     */
+    @Volatile
+    var strategy: FragStrategy = FragStrategy.FAST
 
     /** Фактический порт (после start; для port=0 - эфемерный). */
     val localPort: Int get() = server?.localPort ?: port
@@ -220,12 +284,13 @@ class DpiProxy(
         resolveCache.getOrPut(host) { resolve(host) }
 
     /**
-     * Дробит первый TLS-запись (ClientHello) и пайпит остаток.
+     * Дробит первый TLS-запись (ClientHello) по текущей [strategy] и пайпит
+     * остаток.
      *
-     * Схема как у zapret: сегмент 1 = заголовок записи + 1 байт хэндшейка,
-     * сегмент 2 = следующие 3 байта, сегмент 3 = остальное. ТСПУ видит
-     * неполный ClientHello без SNI и пропускает; сервер собирает TCP-поток
-     * и получает валидный хэндшейк.
+     * Заголовок записи пишется вместе с первым сегментом; далее - сегменты
+     * схемы с паузами, хвост одной порцией. ТСПУ видит неполный ClientHello
+     * без SNI и пропускает; сервер собирает TCP-поток и получает валидный
+     * хэндшейк. Схему меняет автоподбор между пробами.
      */
     private fun fragmentAndPipe(cin: InputStream, cout: OutputStream, target: Socket) {
         val tin = target.getInputStream()
@@ -241,17 +306,21 @@ class DpiProxy(
                     tout.flush()
                     return
                 }
-                tout.write(head)
-                if (body.isNotEmpty()) tout.write(body, 0, 1)
-                tout.flush()
-                Thread.sleep(gap1Ms)
-                val split2 = minOf(body.size, 4)
-                if (split2 > 1) {
-                    tout.write(body, 1, split2 - 1)
+                val st = strategy
+                var off = 0
+                for (i in st.splits.indices) {
+                    if (off >= body.size) break
+                    val n = minOf(st.splits[i], body.size - off)
+                    if (i == 0) tout.write(head)
+                    tout.write(body, off, n)
                     tout.flush()
-                    Thread.sleep(gap2Ms)
+                    off += n
+                    if (off < body.size && i < st.gaps.size && st.gaps[i] > 0) {
+                        Thread.sleep(st.gaps[i])
+                    }
                 }
-                if (body.size > split2) tout.write(body, split2, body.size - split2)
+                if (off == 0) tout.write(head) // body пуст - просто заголовок
+                if (off < body.size) tout.write(body, off, body.size - off)
                 tout.flush()
             } else {
                 // не TLS - пропускаем как есть
